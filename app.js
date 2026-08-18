@@ -7,6 +7,9 @@
     participant: null,
     camera: null,
     scanning: false,
+    cameras: [],
+    selectedCameraId: '',
+    cameraAttempt: 0,
     lastToken: '',
     lastScanAt: 0,
     requestSeq: 0
@@ -186,54 +189,219 @@
     }
   }
 
-  async function openCamera() {
-    $('cameraModal').classList.remove('hidden');
-    $('cameraFeedback').textContent = 'Memulai kamera...';
-    if (!window.Html5Qrcode) {
-      $('cameraFeedback').textContent = 'Pustaka pemindai QR tidak termuat.';
-      return;
+  function setCameraFeedback(message, tone='neutral') {
+    const el = $('cameraFeedback');
+    el.textContent = message;
+    el.style.color = tone === 'bad' ? '#b91c1c' : tone === 'ok' ? '#166534' : '';
+  }
+
+  function cameraName(device, index) {
+    const label = String(device?.label || '').trim();
+    if (label) return label;
+    return `Kamera ${index + 1}`;
+  }
+
+  function rankCamera(device) {
+    const label = String(device?.label || '').toLowerCase();
+    let score = 0;
+    if (/back|rear|environment|belakang|utama|world/.test(label)) score += 100;
+    if (/front|user|depan|selfie/.test(label)) score -= 20;
+    return score;
+  }
+
+  async function prepareCameraDevices() {
+    if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
+      throw new Error('Browser tidak menyediakan akses kamera yang diperlukan.');
     }
-    state.camera = new Html5Qrcode('participantReader');
+
+    // Meminta akses sekali lebih dulu membuat daftar kamera dan label perangkat
+    // menjadi lebih konsisten pada browser mobile setelah izin diberikan.
+    let warmupStream = null;
     try {
-      await state.camera.start(
-        {facingMode:'environment'},
-        {fps:10, qrbox:{width:260,height:260}, rememberLastUsedCamera:true},
-        async text => {
-          const now = Date.now();
-          if (text === state.lastToken && now - state.lastScanAt < BM42_SCAN_COOLDOWN_MS) return;
-          state.lastToken = text; state.lastScanAt = now;
-          try {
-            const res = await api('searchParticipant', {q:text});
-            if (res.candidates.length === 1) {
-              renderParticipant(res.candidates[0]);
-              await closeCamera();
-            } else if (res.candidates.length === 0) {
-              $('cameraFeedback').textContent = 'QR terbaca, tetapi tidak terdaftar.';
-            } else {
-              $('cameraFeedback').textContent = 'QR terbaca. Pilih peserta dari hasil pencarian.';
-              await closeCamera();
-              $('searchResults').innerHTML = res.candidates.map(p => `<div class="candidate"><div class="candidate-main"><div class="candidate-name">${escapeHtml(p.id)} • ${escapeHtml(p.name)}</div><div class="candidate-meta">${escapeHtml(p.drug)} • ${escapeHtml(p.group)}</div></div><button class="secondary" data-id="${escapeHtml(p.id)}">Pilih</button></div>`).join('');
-              [...$('searchResults').querySelectorAll('button')].forEach(btn => btn.addEventListener('click', async () => {
-                const r = await api('searchParticipant', {q:btn.dataset.id});
-                if (r.candidates[0]) renderParticipant(r.candidates[0]);
-              }));
-            }
-          } catch(e) { $('cameraFeedback').textContent = e.message; }
-        },
-        () => {}
-      );
+      warmupStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+    } finally {
+      if (warmupStream) warmupStream.getTracks().forEach(track => track.stop());
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    state.cameras = devices.filter(d => d.kind === 'videoinput').sort((a,b) => rankCamera(b) - rankCamera(a));
+
+    const select = $('cameraSelect');
+    select.innerHTML = '';
+    state.cameras.forEach((device, index) => {
+      const opt = document.createElement('option');
+      opt.value = device.deviceId;
+      opt.textContent = cameraName(device, index);
+      select.appendChild(opt);
+    });
+
+    if (!state.cameras.length) throw new Error('Tidak ada kamera yang terdeteksi pada perangkat.');
+
+    state.selectedCameraId = state.cameras[0].deviceId;
+    select.value = state.selectedCameraId;
+    select.disabled = false;
+    $('switchCameraBtn').disabled = state.cameras.length < 2;
+  }
+
+  async function waitForVideoReady(timeoutMs=2500) {
+    const video = document.querySelector('#participantReader video');
+    if (!video) return false;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        return true;
+      }
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return false;
+  }
+
+  async function startSelectedCamera() {
+    if (!state.camera) state.camera = new Html5Qrcode('participantReader');
+    const scanConfig = {
+      fps: 10,
+      qrbox: { width: 260, height: 260 },
+      aspectRatio: 1.333334,
+      rememberLastUsedCamera: true,
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+    };
+
+    const callback = async text => {
+      const now = Date.now();
+      if (text === state.lastToken && now - state.lastScanAt < BM42_SCAN_COOLDOWN_MS) return;
+      state.lastToken = text;
+      state.lastScanAt = now;
+      try {
+        const res = await api('searchParticipant', {q:text});
+        if (res.candidates.length === 1) {
+          renderParticipant(res.candidates[0]);
+          await closeCamera();
+        } else if (res.candidates.length === 0) {
+          setCameraFeedback('QR terbaca, tetapi peserta tidak ditemukan.', 'bad');
+        } else {
+          setCameraFeedback('QR terbaca. Pilih peserta dari hasil pencarian.');
+          await closeCamera();
+          $('searchResults').innerHTML = res.candidates.map(p => `<div class="candidate"><div class="candidate-main"><div class="candidate-name">${escapeHtml(p.id)} • ${escapeHtml(p.name)}</div><div class="candidate-meta">${escapeHtml(p.drug)} • ${escapeHtml(p.group)}</div></div><button class="secondary" data-id="${escapeHtml(p.id)}">Pilih</button></div>`).join('');
+          [...$('searchResults').querySelectorAll('button')].forEach(btn => btn.addEventListener('click', async () => {
+            const r = await api('searchParticipant', {q:btn.dataset.id});
+            if (r.candidates[0]) renderParticipant(r.candidates[0]);
+          }));
+        }
+      } catch(e) { setCameraFeedback(e.message, 'bad'); }
+    };
+
+    const qrError = () => {};
+    setCameraFeedback('Menyalakan kamera...');
+
+    try {
+      // Pilih deviceId yang sudah terdeteksi agar browser tidak perlu menebak kamera.
+      if (state.selectedCameraId) {
+        await state.camera.start({deviceId:{exact:state.selectedCameraId}}, scanConfig, callback, qrError);
+      } else {
+        await state.camera.start({facingMode:{ideal:'environment'}}, scanConfig, callback, qrError);
+      }
+
       state.scanning = true;
+      const ready = await waitForVideoReady();
+      if (!ready) {
+        throw new Error('Kamera aktif tetapi gambar video tidak tersedia. Coba Ganti Kamera atau Coba Lagi.');
+      }
       $('cameraFeedback').textContent = 'Kamera aktif. Arahkan QR peserta ke kotak pemindaian.';
+      $('cameraFeedback').style.color = '#166534';
     } catch (e) {
-      $('cameraFeedback').textContent = `Kamera gagal dibuka: ${e.name || ''} ${e.message || ''}`;
+      try {
+        if (state.scanning || state.camera) await state.camera.stop();
+      } catch (_) {}
+      try { state.camera?.clear(); } catch (_) {}
+      state.scanning = false;
+      state.camera = null;
+      throw e;
     }
   }
 
-  async function closeCamera() {
-    if (state.camera && state.scanning) {
-      try { await state.camera.stop(); state.camera.clear(); } catch (_) {}
+  async function openCamera() {
+    $('cameraModal').classList.remove('hidden');
+    $('cameraSelect').disabled = true;
+    $('switchCameraBtn').disabled = true;
+    setCameraFeedback('Memeriksa izin dan perangkat kamera...');
+    if (!window.Html5Qrcode) {
+      setCameraFeedback('Pustaka pemindai QR tidak termuat.', 'bad');
+      return;
     }
-    state.scanning = false; state.camera = null; $('cameraModal').classList.add('hidden');
+
+    try {
+      await prepareCameraDevices();
+
+      // Coba kamera yang paling mungkin merupakan kamera belakang terlebih dahulu.
+      // Jika preview tidak muncul, coba kamera lain secara otomatis sebelum menyerah.
+      let lastError = null;
+      for (let i = 0; i < state.cameras.length; i++) {
+        state.selectedCameraId = state.cameras[i].deviceId;
+        $('cameraSelect').value = state.selectedCameraId;
+        try {
+          await startSelectedCamera();
+          return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      throw lastError || new Error('Tidak ada kamera yang berhasil menampilkan video.');
+    } catch (e) {
+      const name = e?.name || 'KAMERA_ERROR';
+      let hint = e?.message || 'Kamera gagal dibuka.';
+      if (name === 'NotAllowedError') hint = 'Izin kamera ditolak. Periksa izin kamera untuk browser dan situs ini.';
+      else if (name === 'NotReadableError') hint = 'Kamera sedang digunakan aplikasi lain atau tidak dapat dibaca. Tutup aplikasi kamera lain lalu tekan Coba Lagi.';
+      else if (name === 'OverconstrainedError') hint = 'Kamera yang dipilih tidak dapat digunakan. Tekan Ganti Kamera atau Coba Lagi.';
+      else if (name === 'SecurityError') hint = 'Browser memblokir akses kamera karena kebijakan keamanan.';
+      setCameraFeedback(`${name}: ${hint}`, 'bad');
+    }
+  }
+
+  async function restartCameraWithSelected() {
+    try {
+      if (state.scanning && state.camera) {
+        await state.camera.stop();
+        state.camera.clear();
+        state.scanning = false;
+      }
+      state.camera = new Html5Qrcode('participantReader');
+      await startSelectedCamera();
+    } catch (e) {
+      const name = e?.name || 'KAMERA_ERROR';
+      setCameraFeedback(`${name}: ${e?.message || 'Kamera gagal dimulai ulang.'}`, 'bad');
+    }
+  }
+
+  async function cycleCamera() {
+    if (state.cameras.length < 2) {
+      setCameraFeedback('Perangkat ini hanya melaporkan satu kamera.', 'neutral');
+      return;
+    }
+    const currentIndex = state.cameras.findIndex(d => d.deviceId === state.selectedCameraId);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % state.cameras.length : 0;
+    state.selectedCameraId = state.cameras[nextIndex].deviceId;
+    $('cameraSelect').value = state.selectedCameraId;
+    await restartCameraWithSelected();
+  }
+
+  async function closeCamera() {
+    if (state.camera) {
+      try { if (state.scanning) await state.camera.stop(); } catch (_) {}
+      try { state.camera.clear(); } catch (_) {}
+    }
+    state.scanning = false;
+    state.camera = null;
+    $('cameraSelect').disabled = true;
+    $('switchCameraBtn').disabled = true;
+    $('cameraModal').classList.add('hidden');
   }
 
   function openModule(title) {
@@ -296,10 +464,17 @@
     const body = $('formBody');
     body.innerHTML = `<div class="form-grid"><div class="field"><label>Periode</label><select id="sikapPeriode" class="input"><option>Keseluruhan BM</option><option>Hari 1</option><option>Hari 2</option></select></div></div><div style="margin-top:14px" id="sikapAspects"></div><div class="field" style="margin-top:14px"><label>Catatan</label><textarea id="sikapNote" class="input textarea"></textarea></div>`;
     [['disiplin','Disiplin'],['atribut','Atribut'],['kesopanan','Kesopanan'],['keaktifan','Keaktifan']].forEach(([key,label])=>{
-      const d=document.createElement('div');d.className='field';d.style.marginBottom='12px';d.innerHTML=`<div class="field-title">${label}</div><div class="radio-grid" id="${key}">${[1,2,3,4].map((n,i)=>`<button type="button" class="radio-btn ${i===0?'active':''}" data-value="${n}">${n}</button>`).join('')}</div><div class="small muted">1 = jauh di bawah harapan • 4 = sangat konsisten</div>`; $('sikapAspects').appendChild(d); bindRadioButtons(key);
+      $('sikapAspects').appendChild(scaleBlock(key,label));
     });
     body.appendChild(formActions(async()=>{
-      await saveGeneric('saveSikap',{periode:$('sikapPeriode').value,disiplin:getRadioValue('disiplin'),atribut:getRadioValue('atribut'),kesopanan:getRadioValue('kesopanan'),keaktifan:getRadioValue('keaktifan'),catatan:$('sikapNote').value},'Penilaian sikap tersimpan.');
+      await saveGeneric('saveSikap',{
+        periode:$('sikapPeriode').value,
+        disiplin:getScaleValue('disiplin'),
+        atribut:getScaleValue('atribut'),
+        kesopanan:getScaleValue('kesopanan'),
+        keaktifan:getScaleValue('keaktifan'),
+        catatan:$('sikapNote').value
+      },'Penilaian sikap tersimpan.');
     }));
   }
 
@@ -322,7 +497,31 @@
 
   function renderIncidentForm(){const body=$('formBody');body.innerHTML=`<div class="form-grid"><div class="field"><label>Aktivitas</label><input id="incActivity" class="input" placeholder="Contoh: Retorika • Post 04"></div><div class="field"><label>Kategori</label><select id="incCategory" class="input"><option>Disiplin</option><option>Atribut</option><option>Kesopanan</option><option>Tanggung jawab</option><option>Kepatuhan instruksi</option><option>Profesionalisme</option><option>Lainnya</option></select></div><div class="field"><label>Tingkat</label><div class="radio-grid" id="incSeverity">${['Ringan','Sedang','Berat'].map((x,i)=>`<button type="button" class="radio-btn ${i===0?'active':''}" data-value="${x}">${x}</button>`).join('')}</div></div><div class="field form-full"><label>Uraian kejadian</label><textarea id="incText" class="input textarea" placeholder="Tuliskan kejadian secara faktual, singkat, dan spesifik."></textarea></div><div class="field form-full"><label>Tautan bukti (opsional)</label><input id="incEvidence" class="input" placeholder="Tautan Drive / bukti"></div></div>`;bindRadioButtons('incSeverity');body.appendChild(formActions(async()=>{await saveGeneric('saveIncident',{aktivitas:$('incActivity').value,kategori:$('incCategory').value,tingkat:getRadioValue('incSeverity'),uraian:$('incText').value,tautanBukti:$('incEvidence').value},'Catatan kejadian tersimpan.');}));}
 
-  function scaleBlock(key,label){const div=document.createElement('div');div.className='field';div.style.marginBottom='14px';div.innerHTML=`<div class="field-title">${label}</div><div class="scale-row" id="scale-${key}">${[-3,-2,-1,0,1,2,3].map((n,i)=>`<button type="button" class="scale-btn ${i===3?'active':''}" data-value="${n}">${n>0?`+${n}`:n}</button>`).join('')}</div><div class="scale-caption"><span>Sangat di bawah harapan</span><span>0 = sesuai harapan</span><span>Sangat di atas harapan</span></div></div>`;div.querySelectorAll('.scale-btn').forEach(btn=>btn.addEventListener('click',()=>{div.querySelectorAll('.scale-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');}));return div;}
+  function scaleBlock(key,label){
+    const div=document.createElement('div');
+    div.className='field scale-block';
+    div.innerHTML=`
+      <div class="field-title">${label}</div>
+      <div class="scale-scroll">
+        <div class="scale-grid scale-labels">
+          <span>-3<br><small>Sangat di bawah</small></span>
+          <span>-2<br><small>Di bawah</small></span>
+          <span>-1<br><small>Sedikit di bawah</small></span>
+          <span>0<br><small>Sesuai</small></span>
+          <span>+1<br><small>Sedikit di atas</small></span>
+          <span>+2<br><small>Di atas</small></span>
+          <span>+3<br><small>Sangat di atas</small></span>
+        </div>
+        <div class="scale-grid scale-row" id="scale-${key}">
+          ${[-3,-2,-1,0,1,2,3].map((n,i)=>`<button type="button" class="scale-btn ${i===3?'active':''}" data-value="${n}">${n>0?`+${n}`:n}</button>`).join('')}
+        </div>
+      </div>`;
+    div.querySelectorAll('.scale-btn').forEach(btn=>btn.addEventListener('click',()=>{
+      div.querySelectorAll('.scale-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+    }));
+    return div;
+  }
   function getScaleValue(key){return document.querySelector(`#scale-${key} .scale-btn.active`)?.dataset.value || '0';}
   function bindRadioButtons(id){const wrap=$(id);wrap.querySelectorAll('.radio-btn').forEach(btn=>btn.addEventListener('click',()=>{wrap.querySelectorAll('.radio-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');}));}
   function getRadioValue(id){return $(id).querySelector('.radio-btn.active')?.dataset.value || ''}
@@ -342,6 +541,9 @@
   $('searchParticipantBtn').addEventListener('click',()=>searchParticipant($('participantQuery').value));
   $('scanParticipantBtn').addEventListener('click',openCamera);
   $('closeCameraBtn').addEventListener('click',closeCamera);
+  $('cameraSelect').addEventListener('change', async e => { state.selectedCameraId = e.target.value; await restartCameraWithSelected(); });
+  $('switchCameraBtn').addEventListener('click',cycleCamera);
+  $('retryCameraBtn').addEventListener('click',async () => { await restartCameraWithSelected(); });
   $('closeFormBtn').addEventListener('click',()=>$('formSection').classList.add('hidden'));
 
   ensureIdentity();

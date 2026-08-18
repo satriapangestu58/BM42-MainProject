@@ -91,13 +91,25 @@
           </div>
           <button id="closeCameraBtn" class="secondary">Tutup</button>
         </div>
+        <div class="camera-toolbar">
+          <div class="field camera-select-wrap">
+            <label for="cameraSelect">Kamera</label>
+            <select id="cameraSelect" class="input" disabled>
+              <option>Memuat kamera...</option>
+            </select>
+          </div>
+          <div class="camera-actions">
+            <button id="switchCameraBtn" class="secondary" disabled>Ganti Kamera</button>
+            <button id="retryCameraBtn" class="secondary">Coba Lagi</button>
+          </div>
+        </div>
         <div id="participantReader"></div>
         <div id="cameraFeedback" class="small muted">Menunggu kamera...</div>
       </div>
     </div>
   </main>
 
-  <script src="config.js?v=20260818-v1"></script>
-  <script src="app.js?v=20260818-v1"></script>
+  <script src="config.js?v=20260818-v2"></script>
+  <script src="app.js?v=20260818-v2"></script>
 </body>
 </html>
