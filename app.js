@@ -94,7 +94,7 @@
     return ({SC:'Steering Committee', RETORIKA:'Penilai Retorika', PERSONALIA:'Personalia', OC:'Organizer Committee', ADMIN:'Admin'})[role] || role;
   }
 
-  function jsonp(params, timeoutMs=12000) {
+  function jsonp(params, timeoutMs=8000) {
     return new Promise((resolve, reject) => {
       const cb = '__bm42_assess_' + Date.now() + '_' + (++state.requestSeq);
       const url = new URL(BM42_API_URL);
@@ -109,7 +109,7 @@
         delete window[cb];
         script.remove();
       };
-      const timer = setTimeout(() => { cleanup(); reject(new Error('Waktu tunggu backend habis.')); }, timeoutMs);
+      const timer = setTimeout(() => { cleanup(); reject(new Error('Server membutuhkan waktu terlalu lama. Coba lagi.')); }, timeoutMs);
       window[cb] = payload => { cleanup(); resolve(payload); };
       script.onerror = () => { cleanup(); reject(new Error('Backend tidak dapat dihubungi.')); };
       script.src = url.toString();
@@ -124,13 +124,40 @@
     return res;
   }
 
-  async function refreshState() {
+  let lastServerSecond = null;
+  let backendCheckInFlight = false;
+
+  function showLocalClock() {
+    if (!lastServerSecond) return;
+    const t = new Date(lastServerSecond);
+    t.setSeconds(t.getSeconds() + 1);
+    lastServerSecond = t;
+    $('serverClock').textContent = t.toLocaleTimeString('id-ID', {
+      hour12:false,
+      hour:'2-digit',
+      minute:'2-digit',
+      second:'2-digit'
+    });
+  }
+
+  async function refreshState(force=false) {
+    if (backendCheckInFlight && !force) return;
+    backendCheckInFlight = true;
     try {
-      const res = await jsonp({action:'state'});
-      $('serverClock').textContent = res.serverTime ? res.serverTime.split(' ')[1] : '--:--:--';
+      const res = await jsonp({action:'state'}, 8000);
+      if (res.serverTime) {
+        const parts = res.serverTime.split(' ');
+        lastServerSecond = new Date(parts[0] + 'T' + parts[1] + '+07:00');
+      }
+      $('serverClock').textContent = lastServerSecond
+        ? lastServerSecond.toLocaleTimeString('id-ID', {hour12:false})
+        : '--:--:--';
       setBackend(true, res.event ? 'TERHUBUNG • KEGIATAN AKTIF' : 'TERHUBUNG');
     } catch (e) {
-      setBackend(false, 'BACKEND ERROR');
+      setBackend(false, 'BACKEND SULIT DIAKSES');
+      console.warn('BM42 state:', e.message);
+    } finally {
+      backendCheckInFlight = false;
     }
   }
 
@@ -432,37 +459,77 @@
         <div class="field"><label>Kelompok</label><select id="auditGroup" class="input"><option value="">Semua Kelompok</option>${Array.from({length:20},(_,i)=>`<option>G${String(i+1).padStart(2,'0')}</option>`).join('')}</select></div>
         <div class="field" style="align-self:end"><button id="runAuditBtn" class="primary" style="width:100%">Periksa</button></div>
       </div>
+      <div class="audit-actions">
+        <button id="refreshAuditBtn" class="secondary" type="button">Muat Ulang Status</button>
+      </div>
       <div id="auditResult"></div>`;
     const comp=$('auditComponent'), unit=$('auditUnit');
     const refreshUnits=()=>{unit.innerHTML=auditComponentOptions(comp.value).map(x=>`<option>${x}</option>`).join('');};
     comp.addEventListener('change',refreshUnits);
     refreshUnits();
     $('runAuditBtn').addEventListener('click',runAudit);
+    $('refreshAuditBtn').addEventListener('click',runAudit);
     window.scrollTo({top:$('auditSection').offsetTop-10,behavior:'smooth'});
   }
 
+  const auditClientCache = new Map();
+
   async function runAudit(){
     const result=$('auditResult');
-    result.innerHTML='<div class="small muted">Memeriksa kelengkapan penilaian...</div>';
+    const key = [
+      $('auditComponent').value,
+      $('auditUnit').value,
+      $('auditGroup').value
+    ].join('|');
+
+    result.innerHTML='<div class="small muted">Memeriksa status penilaian...</div>';
     try{
+      const cached = auditClientCache.get(key);
+      const now = Date.now();
+      if (cached && (now - cached.at) < 15000) {
+        renderAuditResult(result, cached.data);
+        return;
+      }
+
       const res=await api('auditAssessment',{component:$('auditComponent').value,unit:$('auditUnit').value,group:$('auditGroup').value});
-      result.innerHTML=`
-        <div class="audit-summary">
-          <div class="audit-metric"><div class="small">Total</div><div class="num">${res.total}</div></div>
-          <div class="audit-metric"><div class="small">Sudah dinilai</div><div class="num" style="color:#166534">${res.complete}</div></div>
-          <div class="audit-metric"><div class="small">Belum dinilai</div><div class="num" style="color:#b91c1c">${res.missingCount}</div></div>
-        </div>
-        <div class="actions"><button id="auditCopyBtn" class="secondary">Salin Daftar</button></div>
-        ${res.missingCount ? `<div style="margin-top:10px"><table class="audit-table"><thead><tr><th>ID</th><th>Nama</th><th>Nama Obat</th><th>Kelompok</th><th>Aksi</th></tr></thead><tbody>${res.missing.map(p=>`<tr><td>${escapeHtml(p.id)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.drug)}</td><td>${escapeHtml(p.group)}</td><td><button class="secondary audit-select" data-id="${escapeHtml(p.id)}">Nilai</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="audit-participant-card"><strong>Semua peserta sudah memiliki data untuk komponen ini.</strong></div>'}`;
-      $('auditCopyBtn')?.addEventListener('click',async()=>{
-        const text=res.missing.map(p=>`${p.id}\t${p.name}\t${p.drug}\t${p.group}`).join('\n');
-        try{await navigator.clipboard.writeText(text);showFeedback('ok','Daftar peserta berhasil disalin.');}catch(_){showFeedback('bad','Daftar tidak dapat disalin otomatis.');}
-      });
-      result.querySelectorAll('.audit-select').forEach(btn=>btn.addEventListener('click',async()=>{
-        const r=await api('searchParticipant',{q:btn.dataset.id});
-        if(r.candidates[0]){renderParticipant(r.candidates[0]);$('auditSection').classList.add('hidden');openModule($('auditComponent').value);}
-      }));
+      auditClientCache.set(key, {at: Date.now(), data: res});
+      renderAuditResult(result, res);
     }catch(e){result.innerHTML=`<div class="small" style="color:#b91c1c">${escapeHtml(e.message)}</div>`;}
+  }
+
+
+  function renderAuditResult(result, res){
+    result.innerHTML=`
+      <div class="audit-summary">
+        <div class="audit-metric"><div class="small">Total</div><div class="num">${res.total}</div></div>
+        <div class="audit-metric"><div class="small">Sudah dinilai</div><div class="num" style="color:#166534">${res.complete}</div></div>
+        <div class="audit-metric"><div class="small">Belum dinilai</div><div class="num" style="color:#b91c1c">${res.missingCount}</div></div>
+      </div>
+      <div class="actions">
+        <button id="auditCopyBtn" class="secondary">Salin Daftar</button>
+      </div>
+      ${res.missingCount ? `<div style="margin-top:10px"><table class="audit-table"><thead><tr><th>ID</th><th>Nama</th><th>Nama Obat</th><th>Kelompok</th><th>Aksi</th></tr></thead><tbody>${res.missing.map(p=>`<tr><td>${escapeHtml(p.id)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.drug)}</td><td>${escapeHtml(p.group)}</td><td><button class="secondary audit-select" data-id="${escapeHtml(p.id)}">Nilai</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="audit-participant-card"><strong>Semua peserta sudah memiliki data untuk komponen ini.</strong></div>'}`;
+
+    $('auditCopyBtn')?.addEventListener('click',async()=>{
+      const text=res.missing.map(p=>`${p.id}\t${p.name}\t${p.drug}\t${p.group}`).join('\n');
+      try{await navigator.clipboard.writeText(text);showFeedback('ok','Daftar peserta berhasil disalin.');}
+      catch(_){showFeedback('bad','Daftar tidak dapat disalin otomatis.');}
+    });
+
+    result.querySelectorAll('.audit-select').forEach(btn=>{
+      btn.addEventListener('click',async()=>{
+        try{
+          const r=await api('searchParticipant',{q:btn.dataset.id});
+          if(r.candidates[0]){
+            renderParticipant(r.candidates[0]);
+            $('auditSection').classList.add('hidden');
+            openModule($('auditComponent').value);
+          }
+        }catch(e){
+          showFeedback('bad',e.message);
+        }
+      });
+    });
   }
 
   async function auditCurrentParticipant(){
@@ -620,6 +687,6 @@
   $('closeAuditBtn').addEventListener('click',()=>$('auditSection').classList.add('hidden'));
 
   ensureIdentity();
-  refreshState();
-  setInterval(refreshState,BM42_STATE_POLL_MS);
+  refreshState(true);
+  setInterval(showLocalClock, 1000);
 })();

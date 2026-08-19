@@ -5,7 +5,7 @@ const BM42_API_URL = "https://script.google.com/macros/s/AKfycbwE7iZEI8zOcM1p6Ny
 const BM42_DEFAULT_EVALUATOR_ID = "SC-01";
 
 // Jeda polling status backend.
-const BM42_STATE_POLL_MS = 15000;
+const BM42_STATE_POLL_MS = 0;
 
 // Jeda scanner agar QR yang sama tidak langsung dikirim berulang.
 const BM42_SCAN_COOLDOWN_MS = 2500;
