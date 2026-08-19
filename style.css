@@ -20,3 +20,17 @@ button,input,select,textarea{font:inherit}.app-shell{max-width:1100px;margin:0 a
 .audit-toolbar .field{
   min-width:0;
 }
+
+.audit-group-list,.audit-detail-list{display:grid;gap:10px;margin-top:12px}
+.audit-group-block{border:1px solid #d7e5e3;border-radius:12px;overflow:hidden;background:#fff}
+.audit-group-title{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#f1f8f7;font-weight:700}
+.audit-list{display:grid}
+.audit-row{display:grid;grid-template-columns:26px 1fr auto;gap:10px;align-items:center;padding:9px 12px;border-top:1px solid #edf2f1}
+.audit-row.compact{grid-template-columns:1fr auto}
+.audit-no{color:#6b7c78;font-size:.86rem}
+.audit-person{display:flex;flex-direction:column;gap:2px;min-width:0}
+.audit-person strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.audit-person span{font-size:.8rem;color:#63736f}
+.badge-warn{background:#fff1f2;color:#b42318;border-radius:999px;padding:3px 8px;font-size:.74rem;font-weight:700}
+.badge-ok{background:#ecfdf3;color:#137333;border-radius:999px;padding:3px 8px;font-size:.74rem;font-weight:700}
+.audit-complete{margin-top:12px;padding:14px;border-radius:12px;background:#ecfdf3;border:1px solid #b7e3c1}

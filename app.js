@@ -499,19 +499,62 @@
 
 
   function renderAuditResult(result, res){
+    const missing = Array.isArray(res.missing) ? res.missing : [];
+    const grouped = {};
+    missing.forEach(p=>{
+      const g=p.group || 'Tanpa Kelompok';
+      if(!grouped[g]) grouped[g]=[];
+      grouped[g].push(p);
+    });
+
+    const groups = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+
     result.innerHTML=`
       <div class="audit-summary">
-        <div class="audit-metric"><div class="small">Total</div><div class="num">${res.total}</div></div>
+        <div class="audit-metric"><div class="small">Peserta wajib</div><div class="num">${res.total}</div></div>
         <div class="audit-metric"><div class="small">Sudah dinilai</div><div class="num" style="color:#166534">${res.complete}</div></div>
         <div class="audit-metric"><div class="small">Belum dinilai</div><div class="num" style="color:#b91c1c">${res.missingCount}</div></div>
       </div>
-      <div class="actions">
-        <button id="auditCopyBtn" class="secondary">Salin Daftar</button>
-      </div>
-      ${res.missingCount ? `<div style="margin-top:10px"><table class="audit-table"><thead><tr><th>ID</th><th>Nama</th><th>Nama Obat</th><th>Kelompok</th><th>Aksi</th></tr></thead><tbody>${res.missing.map(p=>`<tr><td>${escapeHtml(p.id)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.drug)}</td><td>${escapeHtml(p.group)}</td><td><button class="secondary audit-select" data-id="${escapeHtml(p.id)}">Nilai</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="audit-participant-card"><strong>Semua peserta sudah memiliki data untuk komponen ini.</strong></div>'}`;
+
+      ${res.missingCount ? `
+        <div class="audit-toolbar">
+          <div class="small"><strong>${escapeHtml(res.component)}</strong> • ${escapeHtml(res.unit)}${$('auditGroup').value ? ' • Kelompok '+escapeHtml($('auditGroup').value) : ''}</div>
+          <div class="actions">
+            <button id="auditCopyBtn" class="secondary">Salin Daftar</button>
+          </div>
+        </div>
+
+        <div class="audit-group-list">
+          ${groups.map(group=>`
+            <div class="audit-group-block">
+              <div class="audit-group-title">
+                <span>${escapeHtml(group)}</span>
+                <span class="badge-warn">${grouped[group].length} belum</span>
+              </div>
+              <div class="audit-list">
+                ${grouped[group].map((p,i)=>`
+                  <div class="audit-row">
+                    <div class="audit-no">${i+1}</div>
+                    <div class="audit-person">
+                      <strong>${escapeHtml(p.id)} • ${escapeHtml(p.name)}</strong>
+                      <span>${escapeHtml(p.drug || '')}</span>
+                    </div>
+                    <button class="secondary audit-select" data-id="${escapeHtml(p.id)}">Nilai</button>
+                  </div>`).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : `
+        <div class="audit-complete">
+          <strong>Semua peserta yang diwajibkan sudah memiliki nilai.</strong>
+          <div class="small muted">${escapeHtml(res.component)} • ${escapeHtml(res.unit)}</div>
+        </div>
+      `}
+    `;
 
     $('auditCopyBtn')?.addEventListener('click',async()=>{
-      const text=res.missing.map(p=>`${p.id}\t${p.name}\t${p.drug}\t${p.group}`).join('\n');
+      const text=missing.map(p=>`${p.id}\t${p.name}\t${p.drug||''}\t${p.group||''}`).join('\n');
       try{await navigator.clipboard.writeText(text);showFeedback('ok','Daftar peserta berhasil disalin.');}
       catch(_){showFeedback('bad','Daftar tidak dapat disalin otomatis.');}
     });
@@ -520,14 +563,18 @@
       btn.addEventListener('click',async()=>{
         try{
           const r=await api('searchParticipant',{q:btn.dataset.id});
-          if(r.candidates[0]){
+          if(r.candidates?.[0]){
             renderParticipant(r.candidates[0]);
-            $('auditSection').classList.add('hidden');
-            openModule($('auditComponent').value);
+            $('auditSection')?.classList.add('hidden');
+            // Buka modul yang sedang diaudit, jika tersedia.
+            const comp=$('auditComponent')?.value;
+            if(comp==='Post-Test') openModule('Post-Test');
+            else if(comp==='Sikap Peserta') openModule('Sikap Peserta');
+            else if(comp==='Tugas') openModule('Tugas');
+            else if(comp==='Retorika') openModule('Retorika');
+            else if(comp==='Problem Solving') openModule('Problem Solving');
           }
-        }catch(e){
-          showFeedback('bad',e.message);
-        }
+        }catch(e){showFeedback('bad',e.message);}
       });
     });
   }
