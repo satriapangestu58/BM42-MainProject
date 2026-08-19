@@ -143,11 +143,18 @@
     list.forEach(([title, desc]) => {
       const btn = document.createElement('button');
       btn.className = 'module-btn';
-      btn.innerHTML = `<strong>${title}</strong><div class="small muted">${desc}</div>`;
+      btn.innerHTML = `<strong>${title}</strong><div class=\"small muted\">${desc}</div>`;
       btn.disabled = !state.participant;
       btn.addEventListener('click', () => openModule(title));
       $('moduleButtons').appendChild(btn);
     });
+    if (state.role === 'PERSONALIA' || state.role === 'ADMIN') {
+      const auditBtn = document.createElement('button');
+      auditBtn.className = 'module-btn';
+      auditBtn.innerHTML = '<strong>Audit Kelengkapan</strong><div class="small muted">Lihat peserta yang belum memiliki nilai.</div>';
+      auditBtn.addEventListener('click', openAudit);
+      $('moduleButtons').appendChild(auditBtn);
+    }
   }
 
   function renderParticipant(p) {
@@ -160,9 +167,10 @@
         <div class="selected-item"><div class="k">Nama obat</div><div class="v">${escapeHtml(p.drug)}</div></div>
         <div class="selected-item"><div class="k">Kelompok</div><div class="v">${escapeHtml(p.group)}</div></div>
       </div>
-      <div class="list-pills"><span class="pill">Peserta aktif</span></div>`;
+      <div class="list-pills"><span class="pill">Peserta aktif</span><button type="button" class="secondary" id="auditThisParticipantBtn">Lihat Kelengkapan</button></div>`;
     $('searchResults').innerHTML = '';
     renderModules();
+    $('auditThisParticipantBtn')?.addEventListener('click',auditCurrentParticipant);
     window.scrollTo({top: document.body.scrollHeight, behavior:'smooth'});
   }
 
@@ -404,6 +412,70 @@
     $('cameraModal').classList.add('hidden');
   }
 
+  function auditComponentOptions(component){
+    const map={
+      'Post-Test':['Materi 1','Materi 2','Materi 3','Materi 4','Materi 5','Materi 6'],
+      'Sikap Peserta':['Keseluruhan BM','Hari 1','Hari 2'],
+      'Tugas':['ESAI','VIDEO','LINKEDIN'],
+      'Retorika':Array.from({length:20},(_,i)=>`Post ${String(i+1).padStart(2,'0')}`),
+      'Problem Solving':Array.from({length:20},(_,i)=>`Pos ${String(i+1).padStart(2,'0')}`)
+    };
+    return map[component]||[];
+  }
+
+  function openAudit(){
+    $('auditSection').classList.remove('hidden');
+    $('auditBody').innerHTML=`
+      <div class="audit-toolbar">
+        <div class="field"><label>Komponen</label><select id="auditComponent" class="input">${['Post-Test','Sikap Peserta','Tugas','Retorika','Problem Solving'].map(x=>`<option>${x}</option>`).join('')}</select></div>
+        <div class="field"><label>Bagian</label><select id="auditUnit" class="input"></select></div>
+        <div class="field"><label>Kelompok</label><select id="auditGroup" class="input"><option value="">Semua Kelompok</option>${Array.from({length:20},(_,i)=>`<option>G${String(i+1).padStart(2,'0')}</option>`).join('')}</select></div>
+        <div class="field" style="align-self:end"><button id="runAuditBtn" class="primary" style="width:100%">Periksa</button></div>
+      </div>
+      <div id="auditResult"></div>`;
+    const comp=$('auditComponent'), unit=$('auditUnit');
+    const refreshUnits=()=>{unit.innerHTML=auditComponentOptions(comp.value).map(x=>`<option>${x}</option>`).join('');};
+    comp.addEventListener('change',refreshUnits);
+    refreshUnits();
+    $('runAuditBtn').addEventListener('click',runAudit);
+    window.scrollTo({top:$('auditSection').offsetTop-10,behavior:'smooth'});
+  }
+
+  async function runAudit(){
+    const result=$('auditResult');
+    result.innerHTML='<div class="small muted">Memeriksa kelengkapan penilaian...</div>';
+    try{
+      const res=await api('auditAssessment',{component:$('auditComponent').value,unit:$('auditUnit').value,group:$('auditGroup').value});
+      result.innerHTML=`
+        <div class="audit-summary">
+          <div class="audit-metric"><div class="small">Total</div><div class="num">${res.total}</div></div>
+          <div class="audit-metric"><div class="small">Sudah dinilai</div><div class="num" style="color:#166534">${res.complete}</div></div>
+          <div class="audit-metric"><div class="small">Belum dinilai</div><div class="num" style="color:#b91c1c">${res.missingCount}</div></div>
+        </div>
+        <div class="actions"><button id="auditCopyBtn" class="secondary">Salin Daftar</button></div>
+        ${res.missingCount ? `<div style="margin-top:10px"><table class="audit-table"><thead><tr><th>ID</th><th>Nama</th><th>Nama Obat</th><th>Kelompok</th><th>Aksi</th></tr></thead><tbody>${res.missing.map(p=>`<tr><td>${escapeHtml(p.id)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.drug)}</td><td>${escapeHtml(p.group)}</td><td><button class="secondary audit-select" data-id="${escapeHtml(p.id)}">Nilai</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="audit-participant-card"><strong>Semua peserta sudah memiliki data untuk komponen ini.</strong></div>'}`;
+      $('auditCopyBtn')?.addEventListener('click',async()=>{
+        const text=res.missing.map(p=>`${p.id}\t${p.name}\t${p.drug}\t${p.group}`).join('\n');
+        try{await navigator.clipboard.writeText(text);showFeedback('ok','Daftar peserta berhasil disalin.');}catch(_){showFeedback('bad','Daftar tidak dapat disalin otomatis.');}
+      });
+      result.querySelectorAll('.audit-select').forEach(btn=>btn.addEventListener('click',async()=>{
+        const r=await api('searchParticipant',{q:btn.dataset.id});
+        if(r.candidates[0]){renderParticipant(r.candidates[0]);$('auditSection').classList.add('hidden');openModule($('auditComponent').value);}
+      }));
+    }catch(e){result.innerHTML=`<div class="small" style="color:#b91c1c">${escapeHtml(e.message)}</div>`;}
+  }
+
+  async function auditCurrentParticipant(){
+    if(!state.participant){showFeedback('bad','Pilih peserta terlebih dahulu.');return;}
+    try{
+      const res=await api('auditParticipant',{participantId:state.participant.id});
+      const lines=res.items.map(x=>`<div class="audit-row ${x.status==='LENGKAP'||x.status==='ADA DATA'?'ok':'bad'}"><div class="component">${escapeHtml(x.component)}</div><div class="unit">${escapeHtml(x.unit)}</div><div class="${x.status==='LENGKAP'||x.status==='ADA DATA'?'status-complete':'status-missing'}">${escapeHtml(x.status)}</div></div>`).join('');
+      $('auditSection').classList.remove('hidden');
+      $('auditBody').innerHTML=`<div class="audit-participant-card"><div class="candidate-name">${escapeHtml(res.participant.id)} • ${escapeHtml(res.participant.name)}</div><div class="candidate-meta">${escapeHtml(res.participant.drug)} • ${escapeHtml(res.participant.group)}</div><div class="audit-checklist">${lines}</div></div>`;
+      window.scrollTo({top:$('auditSection').offsetTop-10,behavior:'smooth'});
+    }catch(e){showFeedback('bad',e.message);}
+  }
+
   function openModule(title) {
     if (!state.participant) { showFeedback('bad','Pilih peserta terlebih dahulu.'); return; }
     $('formSection').classList.remove('hidden');
@@ -545,6 +617,7 @@
   $('switchCameraBtn').addEventListener('click',cycleCamera);
   $('retryCameraBtn').addEventListener('click',async () => { await restartCameraWithSelected(); });
   $('closeFormBtn').addEventListener('click',()=>$('formSection').classList.add('hidden'));
+  $('closeAuditBtn').addEventListener('click',()=>$('auditSection').classList.add('hidden'));
 
   ensureIdentity();
   refreshState();
