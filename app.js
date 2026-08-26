@@ -2,7 +2,8 @@ var BM42 = {
   participant: null,
   evaluatorId: '',
   role: '',
-  cameraWindow: null
+  internalScanner: null,
+  internalScannerProcessing: false
 };
 
 function $(id) {
@@ -694,6 +695,139 @@ function showRanking() {
   };
 }
 
+
+function showInternalScanResult(title, body, type) {
+  var el = $('internalScanResult');
+  el.className = 'scan-result ' + (type || 'neutral');
+  el.innerHTML = '<strong>' + esc(title) + '</strong><div>' + body + '</div>';
+}
+
+function processInternalToken(token) {
+  token = String(token || '').trim();
+  if (!token || BM42.internalScannerProcessing) return;
+
+  BM42.internalScannerProcessing = true;
+  setStatus('Memproses QR...');
+
+  api('scan', {
+    token: token,
+    scanner: 'WEB-APP-' + (BM42.evaluatorId || 'UNASSIGNED')
+  }, 10000).then(function(r) {
+    if (r.entityType === 'COMMITTEE') {
+      if (r.ok && r.committee) {
+        showInternalScanResult(
+          'Panitia berhasil tercatat',
+          '<p><b>' + esc(r.committee.name) + '</b></p>' +
+          '<p>' + esc(r.committee.section) + ' • ' + esc(r.committee.role) + '</p>' +
+          '<p>Status: <b>' + esc(r.status || 'ON_TIME') + '</b></p>',
+          'ok'
+        );
+        setStatus('Absensi panitia berhasil dicatat.', 'ok');
+      } else if (r.code === 'DUPLICATE') {
+        showInternalScanResult(
+          'Sudah tercatat',
+          '<p>' + esc(r.committee && r.committee.name ? r.committee.name : 'Panitia') + '</p>' +
+          '<p>Panitia sudah tercatat pada checkpoint ini.</p>',
+          'duplicate'
+        );
+        setStatus('Panitia sudah tercatat.', 'error');
+      } else {
+        showInternalScanResult('Scan ditolak', '<p>' + esc(r.message || 'QR tidak valid.') + '</p>', 'error');
+        setStatus(r.message || 'Scan ditolak.', 'error');
+      }
+      return;
+    }
+
+    if (r.ok && r.participant) {
+      renderParticipant(r.participant);
+      showInternalScanResult(
+        'Peserta ditemukan',
+        '<p><b>' + esc(r.participant.id) + '</b> • ' + esc(r.participant.name) + '</p>' +
+        '<p>' + esc(r.participant.drug) + ' • ' + esc(r.participant.group) + '</p>' +
+        '<p>QR peserta dikenali. Kamera dapat dilanjutkan untuk peserta berikutnya.</p>',
+        'ok'
+      );
+      setStatus('Peserta ' + r.participant.id + ' dipilih.', 'ok');
+      return;
+    }
+
+    if (r.code === 'DUPLICATE') {
+      showInternalScanResult(
+        'Sudah tercatat',
+        '<p>' + esc(r.participant && r.participant.name ? r.participant.name : 'Peserta') + '</p>' +
+        '<p>Peserta sudah tercatat pada checkpoint ini.</p>',
+        'duplicate'
+      );
+      setStatus('Peserta sudah tercatat.', 'error');
+      return;
+    }
+
+    showInternalScanResult('Scan ditolak', '<p>' + esc(r.message || 'QR tidak valid.') + '</p>', 'error');
+    setStatus(r.message || 'Scan ditolak.', 'error');
+  }).catch(function(err) {
+    showInternalScanResult('Backend error', '<p>' + esc(err.message) + '</p>', 'error');
+    setStatus(err.message, 'error');
+  }).finally(function() {
+    setTimeout(function() {
+      BM42.internalScannerProcessing = false;
+    }, 1000);
+  });
+}
+
+function openInternalScanner() {
+  $('internalScanner').classList.remove('hidden');
+  $('internalScanner').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeInternalScanner() {
+  stopInternalCamera();
+  $('internalScanner').classList.add('hidden');
+}
+
+function startInternalCamera() {
+  if (BM42.internalScanner) return;
+
+  if (!window.Html5Qrcode) {
+    setStatus('Modul kamera belum siap. Segarkan halaman lalu coba lagi.', 'error');
+    return;
+  }
+
+  BM42.internalScanner = new Html5Qrcode('mainQrReader');
+
+  BM42.internalScanner.start(
+    { facingMode: 'environment' },
+    { fps: 10, qrbox: { width: 260, height: 260 } },
+    function(decodedText) {
+      processInternalToken(decodedText);
+    },
+    function() {}
+  ).then(function() {
+    $('startInternalCamera').disabled = true;
+    $('stopInternalCamera').disabled = false;
+    setStatus('Kamera internal aktif.', 'ok');
+  }).catch(function() {
+    BM42.internalScanner = null;
+    setStatus(
+      'Kamera tidak dapat diakses. Pastikan halaman HTTPS dan izin kamera diberikan.',
+      'error'
+    );
+  });
+}
+
+function stopInternalCamera() {
+  if (!BM42.internalScanner) return;
+
+  BM42.internalScanner.stop().then(function() {
+    return BM42.internalScanner.clear();
+  }).catch(function() {
+    return Promise.resolve();
+  }).finally(function() {
+    BM42.internalScanner = null;
+    $('startInternalCamera').disabled = false;
+    $('stopInternalCamera').disabled = true;
+  });
+}
+
 function refreshState() {
   api('state', {}, 10000).then(function(r) {
     if (!r.ok) throw new Error(r.message || 'Backend error');
@@ -712,6 +846,16 @@ document.addEventListener('DOMContentLoaded', function() {
   enableModules(false);
 
   $('saveIdentity').onclick = saveIdentity;
+  $('openInternalScanner').onclick = openInternalScanner;
+  $('closeInternalScanner').onclick = closeInternalScanner;
+  $('startInternalCamera').onclick = startInternalCamera;
+  $('stopInternalCamera').onclick = stopInternalCamera;
+  $('mainManualProcess').onclick = function() {
+    processInternalToken($('mainManualToken').value);
+  };
+  $('mainManualToken').onkeydown = function(e) {
+    if (e.key === 'Enter') processInternalToken(e.target.value);
+  };
   $('searchBtn').onclick = searchParticipant;
   $('searchInput').onkeydown = function(e) {
     if (e.key === 'Enter') searchParticipant();

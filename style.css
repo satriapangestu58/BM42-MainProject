@@ -90,3 +90,13 @@ button:disabled{opacity:.45;cursor:not-allowed}
   .assignment-row{grid-template-columns:1fr}
   .counter-grid{grid-template-columns:1fr}
 }
+
+.btn-link{border:0}
+#mainQrReader{margin-top:14px;min-height:300px;background:#081315;border-radius:12px;overflow:hidden}
+.scanner-manual{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:10px}
+.scan-result{margin-top:10px;padding:12px;border-radius:10px;border:1px solid #d8e4e5;background:#f8fbfb}
+.scan-result strong{display:block;margin-bottom:5px}
+.scan-result.ok{background:#eefaf2;border-color:#bce5c8}
+.scan-result.error{background:#fff1f1;border-color:#f0c1c1}
+.scan-result.duplicate{background:#fff7e8;border-color:#edd39b}
+@media(max-width:700px){.scanner-manual{grid-template-columns:1fr}}

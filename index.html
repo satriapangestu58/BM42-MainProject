@@ -50,7 +50,7 @@
       <h2>Pilih Peserta</h2>
       <p>Masukkan QR/token, ID peserta, nama, nama obat, atau kelompok.</p>
     </div>
-    <a class="primary btn-link" href="../bm42-scanner/">Pindai QR Peserta</a>
+    <button id="openInternalScanner" class="primary">Pindai QR</button>
   </div>
   <div class="search-row">
     <input id="searchInput" placeholder="Contoh: P037 / nama peserta / Paracetamol / BM42-XXXX">
@@ -79,6 +79,27 @@
   </div>
 </section>
 
+
+<section id="internalScanner" class="card hidden">
+  <div class="section-head">
+    <div>
+      <h2>Pindai QR</h2>
+      <p>Scanner internal dapat membaca QR peserta maupun QR panitia.</p>
+    </div>
+    <button id="closeInternalScanner" class="secondary">Tutup</button>
+  </div>
+  <div id="mainQrReader"></div>
+  <div class="inline">
+    <button id="startInternalCamera" class="primary">Mulai Kamera</button>
+    <button id="stopInternalCamera" class="secondary" disabled>Hentikan Kamera</button>
+  </div>
+  <div class="scanner-manual">
+    <input id="mainManualToken" placeholder="Fallback: masukkan token QR">
+    <button id="mainManualProcess" class="secondary">Proses Token</button>
+  </div>
+  <div id="internalScanResult" class="scan-result neutral">Belum ada pemindaian.</div>
+</section>
+
 <section id="formCard" class="card hidden">
   <div class="section-head">
     <div><h2 id="formTitle">Form</h2><p id="formSubtitle"></p></div>
@@ -90,6 +111,7 @@
 <section id="statusBox" class="status">Siap.</section>
 </main>
 
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
 </body>
