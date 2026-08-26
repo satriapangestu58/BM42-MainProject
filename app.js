@@ -1,745 +1,740 @@
-(() => {
-  'use strict';
-  const $ = id => document.getElementById(id);
-  const state = {
-    evaluatorId: localStorage.getItem('bm42_evaluator_id') || BM42_DEFAULT_EVALUATOR_ID,
-    role: localStorage.getItem('bm42_role') || 'SC',
-    participant: null,
-    camera: null,
-    scanning: false,
-    cameras: [],
-    selectedCameraId: '',
-    cameraAttempt: 0,
-    lastToken: '',
-    lastScanAt: 0,
-    requestSeq: 0,
-    searchSeq: 0
-  };
+var BM42 = {
+  participant: null,
+  evaluatorId: '',
+  role: '',
+  cameraWindow: null
+};
 
-  const modulesByRole = {
-    SC: [
-      ['Keaktifan Materi', 'Catat peserta yang bertanya, menanggapi, atau menjawab.'],
-      ['Post-Test', 'Masukkan nilai post-test Materi I–VI.'],
-      ['Sikap Peserta', 'Nilai disiplin, atribut, kesopanan, dan keaktifan.'],
-      ['Problem Solving', 'Penilaian sesi problem solving oleh Steering Committee.'],
-      ['Tugas', 'Penilaian esai, video, dan unggahan LinkedIn.'],
-      ['Catatan Kejadian', 'Catat kejadian yang perlu direkam secara objektif.']
-    ],
-    RETORIKA: [
-      ['Retorika', 'Penilaian perilaku peserta selama sesi retorika.'],
-      ['Catatan Kejadian', 'Catat kejadian yang perlu direkam secara objektif.']
-    ],
-    PERSONALIA: [
-      ['Keaktifan Materi', 'Catat aktivitas peserta selama materi.'],
-      ['Post-Test', 'Masukkan atau koreksi nilai post-test Materi I–VI.'],
-      ['Retorika', 'Penilaian perilaku peserta selama retorika.'],
-      ['Sikap Peserta', 'Penilaian sikap selama rangkaian BM.'],
-      ['Problem Solving', 'Penilaian problem solving.'],
-      ['Tugas', 'Penilaian seluruh tugas.'],
-      ['Catatan Kejadian', 'Catat dan tinjau kejadian peserta.']
-    ],
-    OC: [
-      ['Sikap Peserta', 'Penilaian sikap peserta bila ditugaskan.'],
-      ['Catatan Kejadian', 'Catat kejadian yang perlu direkam secara objektif.']
-    ],
-    ADMIN: [
-      ['Keaktifan Materi', 'Catat aktivitas peserta selama materi.'],
-      ['Post-Test', 'Masukkan nilai post-test.'],
-      ['Retorika', 'Penilaian retorika.'],
-      ['Sikap Peserta', 'Penilaian sikap.'],
-      ['Problem Solving', 'Penilaian problem solving.'],
-      ['Tugas', 'Penilaian tugas.'],
-      ['Catatan Kejadian', 'Catat kejadian.']
-    ]
-  };
+function $(id) {
+  return document.getElementById(id);
+}
 
-  const retorikaAspects = [
-    ['tegas', 'Tegas'], ['kritis', 'Kritis'], ['percayaDiri', 'Percaya diri'], ['wawasanLuas', 'Wawasan luas'],
-    ['ramah', 'Ramah'], ['sopan', 'Sopan'], ['serius', 'Serius'], ['keterbukaanMasukan', 'Keterbukaan terhadap masukan'],
-    ['pengendalianDiri', 'Pengendalian diri']
-  ];
-  const psAspects = [
-    ['komunikasi', 'Komunikasi'], ['percayaDiri', 'Percaya diri'], ['pemahamanBahasan', 'Pemahaman bahasan'],
-    ['keaktifan', 'Keaktifan'], ['kritis', 'Berpikir kritis'], ['strukturBerpikir', 'Struktur berpikir'],
-    ['ketepatanSolusi', 'Ketepatan solusi'], ['kolaborasi', 'Kolaborasi']
-  ];
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(m) {
+    return {
+      '&':'&amp;',
+      '<':'&lt;',
+      '>':'&gt;',
+      '"':'&quot;',
+      "'":'&#039;'
+    }[m];
+  });
+}
 
-  function setBackend(ok, text) {
-    const el = $('backendBadge');
-    el.textContent = text;
-    el.className = 'badge ' + (ok ? 'ok' : 'bad');
+function setStatus(message, type) {
+  var el = $('statusBox');
+  el.textContent = message;
+  el.className = 'status ' + (type || '');
+}
+
+function api(action, params, timeout) {
+  params = params || {};
+  timeout = timeout || 12000;
+
+  return new Promise(function(resolve, reject) {
+    var callback = 'bm42v15_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    var script = document.createElement('script');
+    var query = new URLSearchParams(params);
+    query.set('action', action);
+    query.set('callback', callback);
+
+    var timer = setTimeout(function() {
+      cleanup();
+      reject(new Error('Server membutuhkan waktu terlalu lama. Coba lagi.'));
+    }, timeout);
+
+    window[callback] = function(data) {
+      cleanup();
+      resolve(data);
+    };
+
+    script.onerror = function() {
+      cleanup();
+      reject(new Error('Backend tidak dapat diakses.'));
+    };
+
+    script.src = window.BM42_API_URL + '?' + query.toString();
+    document.body.appendChild(script);
+
+    function cleanup() {
+      clearTimeout(timer);
+      script.remove();
+      try { delete window[callback]; } catch (e) {}
+    }
+  });
+}
+
+function enableModules(enabled) {
+  var buttons = document.querySelectorAll('.module');
+  buttons.forEach(function(b) {
+    b.disabled = !enabled;
+  });
+}
+
+function saveIdentity() {
+  BM42.evaluatorId = $('evaluatorId').value.trim() || 'WEB';
+  BM42.role = $('role').value;
+  localStorage.setItem('BM42_V15_EVALUATOR', JSON.stringify({
+    id: BM42.evaluatorId,
+    role: BM42.role
+  }));
+  $('identityInfo').textContent = 'Penilai aktif: ' + BM42.evaluatorId + ' • ' + BM42.role;
+  $('assignmentButton').classList.toggle(
+    'hidden',
+    ['OC','PERSONALIA','ADMIN'].indexOf(BM42.role) === -1
+  );
+  setStatus('Identitas penilai tersimpan.', 'ok');
+}
+
+function restoreIdentity() {
+  var raw = localStorage.getItem('BM42_V15_EVALUATOR');
+  if (!raw) {
+    saveIdentity();
+    return;
+  }
+  try {
+    var x = JSON.parse(raw);
+    $('evaluatorId').value = x.id || '';
+    $('role').value = x.role || 'OC';
+  } catch (e) {}
+  saveIdentity();
+}
+
+function renderParticipant(p) {
+  BM42.participant = p;
+  $('participantCard').classList.remove('empty');
+  $('participantCard').innerHTML =
+    '<div class="participant-grid">' +
+      '<div><small>ID</small><strong>' + esc(p.id) + '</strong></div>' +
+      '<div><small>Nama</small><strong>' + esc(p.name) + '</strong></div>' +
+      '<div><small>Nama Obat</small><strong>' + esc(p.drug) + '</strong></div>' +
+      '<div><small>Kelompok</small><strong>' + esc(p.group) + '</strong></div>' +
+    '</div>' +
+    '<div class="inline">' +
+      '<span class="pill">Peserta aktif</span>' +
+      '<button id="participantAuditBtn" class="secondary">Lihat Kelengkapan</button>' +
+    '</div>';
+
+  $('selectedText').textContent = 'Peserta aktif: ' + p.id + ' • ' + p.name + ' • ' + p.drug;
+  $('participantAuditBtn').onclick = function() { showParticipantAudit(); };
+  enableModules(true);
+  $('candidateList').innerHTML = '';
+  setStatus('Peserta ' + p.id + ' dipilih.', 'ok');
+}
+
+function searchParticipant() {
+  var q = $('searchInput').value.trim();
+  if (!q) {
+    setStatus('Masukkan identitas peserta terlebih dahulu.', 'error');
+    return;
   }
 
-  function showFeedback(kind, text) {
-    const el = $('feedback');
-    el.className = 'card feedback ' + kind;
-    el.textContent = text;
-    el.classList.remove('hidden');
-    setTimeout(() => el.classList.add('hidden'), 3500);
-  }
+  setStatus('Mencari peserta...');
+  api('assessment', {
+    op: 'searchParticipant',
+    q: q
+  }).then(function(data) {
+    if (!data.ok) throw new Error(data.message || 'Pencarian gagal.');
+    if (!data.candidates.length) {
+      setStatus('Peserta tidak ditemukan.', 'error');
+      return;
+    }
 
-  function evaluator() {
-    return $('evaluatorId').value.trim() || state.evaluatorId || 'UNASSIGNED';
-  }
+    if (data.candidates.length === 1) {
+      renderParticipant(data.candidates[0]);
+      return;
+    }
 
-  function ensureIdentity() {
-    state.evaluatorId = evaluator();
-    state.role = $('roleSelect').value;
-    localStorage.setItem('bm42_evaluator_id', state.evaluatorId);
-    localStorage.setItem('bm42_role', state.role);
-    $('identityInfo').textContent = `Penilai aktif: ${state.evaluatorId} • Peran: ${roleLabel(state.role)}`;
-    renderModules();
-  }
+    $('candidateList').innerHTML = data.candidates.map(function(p) {
+      return '<button class="candidate" data-id="' + esc(p.id) + '">' +
+        '<b>' + esc(p.id) + ' • ' + esc(p.name) + '</b>' +
+        '<span>' + esc(p.drug) + ' • ' + esc(p.group) + '</span>' +
+      '</button>';
+    }).join('');
 
-  function roleLabel(role) {
-    return ({SC:'Steering Committee', RETORIKA:'Penilai Retorika', PERSONALIA:'Personalia', OC:'Organizer Committee', ADMIN:'Admin'})[role] || role;
-  }
-
-  function jsonp(params, timeoutMs=15000) {
-    return new Promise((resolve, reject) => {
-      const cb = '__bm42_assess_' + Date.now() + '_' + (++state.requestSeq);
-      const url = new URL(BM42_API_URL);
-      Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, v));
-      url.searchParams.set('prefix', cb);
-      const script = document.createElement('script');
-      let done = false;
-      const cleanup = () => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        delete window[cb];
-        script.remove();
-      };
-      const timer = setTimeout(() => { cleanup(); reject(new Error('Server membutuhkan waktu terlalu lama. Coba lagi.')); }, timeoutMs);
-      window[cb] = payload => { cleanup(); resolve(payload); };
-      script.onerror = () => { cleanup(); reject(new Error('Backend tidak dapat dihubungi.')); };
-      script.src = url.toString();
-      document.body.appendChild(script);
+    data.candidates.forEach(function(p) {
+      var btn = $('candidateList').querySelector('[data-id="' + CSS.escape(p.id) + '"]');
+      if (btn) btn.onclick = function() { renderParticipant(p); };
     });
-  }
+  }).catch(function(err) {
+    setStatus(err.message, 'error');
+  });
+}
 
-  async function api(op, params={}) {
-    const payload = {action:'assessment_v11', op, evaluatorId:evaluator(), role:state.role, ...params};
-    const res = await jsonp(payload);
-    if (!res || res.ok === false) throw new Error(res?.message || res?.code || 'Permintaan gagal.');
-    return res;
-  }
+function openForm(title, subtitle, html) {
+  $('formCard').classList.remove('hidden');
+  $('formTitle').textContent = title;
+  $('formSubtitle').textContent = subtitle || '';
+  $('formBody').innerHTML = html;
+  $('formCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
-  let lastServerSecond = null;
-  let backendCheckInFlight = false;
+function closeForm() {
+  $('formCard').classList.add('hidden');
+  $('formBody').innerHTML = '';
+}
 
-  function showLocalClock() {
-    if (!lastServerSecond) return;
-    const t = new Date(lastServerSecond);
-    t.setSeconds(t.getSeconds() + 1);
-    lastServerSecond = t;
-    $('serverClock').textContent = t.toLocaleTimeString('id-ID', {
-      hour12:false,
-      hour:'2-digit',
-      minute:'2-digit',
-      second:'2-digit'
-    });
-  }
-
-  async function refreshState(force=false) {
-    if (backendCheckInFlight && !force) return;
-    backendCheckInFlight = true;
-    try {
-      const res = await jsonp({action:'state'}, 8000);
-      if (res.serverTime) {
-        const parts = res.serverTime.split(' ');
-        lastServerSecond = new Date(parts[0] + 'T' + parts[1] + '+07:00');
-      }
-      $('serverClock').textContent = lastServerSecond
-        ? lastServerSecond.toLocaleTimeString('id-ID', {hour12:false})
-        : '--:--:--';
-      setBackend(true, res.event ? 'TERHUBUNG • KEGIATAN AKTIF' : 'TERHUBUNG');
-    } catch (e) {
-      setBackend(false, 'BACKEND SULIT DIAKSES');
-      console.warn('BM42 state:', e.message);
-    } finally {
-      backendCheckInFlight = false;
-    }
-  }
-
-  function renderModules() {
-    const list = modulesByRole[state.role] || modulesByRole.SC;
-    $('moduleSection').classList.remove('hidden');
-    $('moduleTitle').textContent = 'Pilih Penilaian';
-    $('moduleSubtitle').textContent = state.participant ? `Peserta aktif: ${state.participant.name} • ${state.participant.drug}` : 'Pilih peserta terlebih dahulu.';
-    $('moduleButtons').innerHTML = '';
-    list.forEach(([title, desc]) => {
-      const btn = document.createElement('button');
-      btn.className = 'module-btn';
-      btn.innerHTML = `<strong>${title}</strong><div class=\"small muted\">${desc}</div>`;
-      btn.disabled = !state.participant;
-      btn.addEventListener('click', () => openModule(title));
-      $('moduleButtons').appendChild(btn);
-    });
-    if (state.role === 'PERSONALIA' || state.role === 'ADMIN') {
-      const auditBtn = document.createElement('button');
-      auditBtn.className = 'module-btn';
-      auditBtn.innerHTML = '<strong>Audit Kelengkapan</strong><div class="small muted">Lihat peserta yang belum memiliki nilai.</div>';
-      auditBtn.addEventListener('click', openAudit);
-      $('moduleButtons').appendChild(auditBtn);
-    }
-  }
-
-  function renderParticipant(p) {
-    state.participant = p;
-    $('selectedParticipant').classList.remove('hidden');
-    $('selectedParticipant').innerHTML = `
-      <div class="selected-grid">
-        <div class="selected-item"><div class="k">ID</div><div class="v">${escapeHtml(p.id)}</div></div>
-        <div class="selected-item"><div class="k">Nama</div><div class="v">${escapeHtml(p.name)}</div></div>
-        <div class="selected-item"><div class="k">Nama obat</div><div class="v">${escapeHtml(p.drug)}</div></div>
-        <div class="selected-item"><div class="k">Kelompok</div><div class="v">${escapeHtml(p.group)}</div></div>
-      </div>
-      <div class="list-pills"><span class="pill">Peserta aktif</span><button type="button" class="secondary" id="auditThisParticipantBtn">Lihat Kelengkapan</button></div>`;
-    $('searchResults').innerHTML = '';
-    renderModules();
-    $('auditThisParticipantBtn')?.addEventListener('click',auditCurrentParticipant);
-    window.scrollTo({top: document.body.scrollHeight, behavior:'smooth'});
-  }
-
-  async function searchParticipant(q) {
-    if (!q.trim()) return;
-    const seq = ++state.searchSeq;
-    const cleanQ = q.trim();
-    $('searchResults').innerHTML = '<div class="small muted">Mencari peserta...</div>';
-    try {
-      const res = await api('searchParticipant', {q:cleanQ});
-      if (seq !== state.searchSeq) return;
-      if (!res.candidates.length) {
-        $('searchResults').innerHTML = '<div class="small muted">Peserta tidak ditemukan.</div>';
-        return;
-      }
-      $('searchResults').innerHTML = '';
-      res.candidates.forEach(p => {
-        const div = document.createElement('div');
-        div.className = 'candidate';
-        div.innerHTML = `<div class="candidate-main"><div class="candidate-name">${escapeHtml(p.id)} • ${escapeHtml(p.name)}</div><div class="candidate-meta">${escapeHtml(p.drug)} • ${escapeHtml(p.group)}</div></div><button class="secondary">Pilih</button>`;
-        div.querySelector('button').addEventListener('click', () => renderParticipant(p));
-        $('searchResults').appendChild(div);
-      });
-      if (res.candidates.length === 1) renderParticipant(res.candidates[0]);
-    } catch (e) {
-      $('searchResults').innerHTML = `<div class="small" style="color:#b91c1c">${escapeHtml(e.message)}</div>`;
-    }
-  }
-
-  function setCameraFeedback(message, tone='neutral') {
-    const el = $('cameraFeedback');
-    el.textContent = message;
-    el.style.color = tone === 'bad' ? '#b91c1c' : tone === 'ok' ? '#166534' : '';
-  }
-
-  function cameraName(device, index) {
-    const label = String(device?.label || '').trim();
-    if (label) return label;
-    return `Kamera ${index + 1}`;
-  }
-
-  function rankCamera(device) {
-    const label = String(device?.label || '').toLowerCase();
-    let score = 0;
-    if (/back|rear|environment|belakang|utama|world/.test(label)) score += 100;
-    if (/front|user|depan|selfie/.test(label)) score -= 20;
-    return score;
-  }
-
-  async function prepareCameraDevices() {
-    if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
-      throw new Error('Browser tidak menyediakan akses kamera yang diperlukan.');
-    }
-
-    // Meminta akses sekali lebih dulu membuat daftar kamera dan label perangkat
-    // menjadi lebih konsisten pada browser mobile setelah izin diberikan.
-    let warmupStream = null;
-    try {
-      warmupStream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      });
-    } finally {
-      if (warmupStream) warmupStream.getTracks().forEach(track => track.stop());
-    }
-
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    state.cameras = devices.filter(d => d.kind === 'videoinput').sort((a,b) => rankCamera(b) - rankCamera(a));
-
-    const select = $('cameraSelect');
-    select.innerHTML = '';
-    state.cameras.forEach((device, index) => {
-      const opt = document.createElement('option');
-      opt.value = device.deviceId;
-      opt.textContent = cameraName(device, index);
-      select.appendChild(opt);
-    });
-
-    if (!state.cameras.length) throw new Error('Tidak ada kamera yang terdeteksi pada perangkat.');
-
-    state.selectedCameraId = state.cameras[0].deviceId;
-    select.value = state.selectedCameraId;
-    select.disabled = false;
-    $('switchCameraBtn').disabled = state.cameras.length < 2;
-  }
-
-  async function waitForVideoReady(timeoutMs=2500) {
-    const video = document.querySelector('#participantReader video');
-    if (!video) return false;
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-        return true;
-      }
-      await new Promise(r => setTimeout(r, 120));
-    }
+function requireParticipant() {
+  if (!BM42.participant) {
+    setStatus('Pilih peserta terlebih dahulu.', 'error');
     return false;
   }
+  return true;
+}
 
-  async function startSelectedCamera() {
-    if (!state.camera) state.camera = new Html5Qrcode('participantReader');
-    const scanConfig = {
-      fps: 10,
-      qrbox: { width: 260, height: 260 },
-      aspectRatio: 1.333334,
-      rememberLastUsedCamera: true,
-      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+function genericFormSave(form, op) {
+  if (!requireParticipant()) return;
+  var data = Object.fromEntries(new FormData(form).entries());
+  data.op = op;
+  data.participantId = BM42.participant.id;
+  data.evaluatorId = BM42.evaluatorId;
+  data.role = BM42.role;
+
+  setStatus('Menyimpan...');
+  api('assessment', data).then(function(r) {
+    if (!r.ok) throw new Error(r.message || 'Gagal menyimpan.');
+    setStatus(r.message || 'Data berhasil disimpan.', 'ok');
+    showParticipantAudit();
+  }).catch(function(err) {
+    setStatus(err.message, 'error');
+  });
+}
+
+function showActivityForm() {
+  openForm(
+    'Keaktifan Materi',
+    BM42.participant.id + ' • ' + BM42.participant.name,
+    '<form id="activityForm" class="grid-2">' +
+      '<div><label>Materi / aktivitas</label><select name="aktivitas">' +
+        '<option>Materi I</option><option>Materi II</option><option>Materi III</option>' +
+        '<option>Materi IV</option><option>Materi V</option><option>Materi VI</option>' +
+      '</select></div>' +
+      '<div><label>Jenis aktivitas</label><select name="jenis">' +
+        '<option value="BERTANYA">Bertanya</option>' +
+        '<option value="MENANGGAPI">Menanggapi</option>' +
+        '<option value="MENJAWAB">Menjawab</option>' +
+      '</select></div>' +
+      '<div class="full"><label>Catatan</label><textarea name="catatan" placeholder="Opsional"></textarea></div>' +
+      '<div class="full"><button type="button" id="activitySave" class="primary">Catat Aktivitas</button></div>' +
+    '</form>'
+  );
+  $('activitySave').onclick = function() {
+    genericFormSave($('activityForm'), 'saveActivity');
+  };
+}
+
+function radioScale(name, label) {
+  var values = [-3,-2,-1,0,1,2,3];
+  return '<div class="poll-block">' +
+    '<strong>' + esc(label) + '</strong>' +
+    '<div class="poll-row">' +
+      values.map(function(v) {
+        return '<label class="poll">' +
+          '<span>' + (v > 0 ? '+' + v : v) + '</span>' +
+          '<input type="radio" name="' + esc(name) + '" value="' + v + '"' + (v === 0 ? ' checked' : '') + '>' +
+        '</label>';
+      }).join('') +
+    '</div>' +
+    '<small class="poll-help">-3 sangat di bawah • 0 sesuai • +3 sangat di atas</small>' +
+  '</div>';
+}
+
+function showSikapForm() {
+  openForm(
+    'Sikap Peserta',
+    BM42.participant.id + ' • penilaian -3 sampai +3',
+    '<form id="sikapForm">' +
+      '<div><label>Periode</label><select name="periode"><option>Keseluruhan BM</option><option>Hari 1</option><option>Hari 2</option></select></div>' +
+      radioScale('Disiplin','Disiplin') +
+      radioScale('Atribut','Atribut') +
+      radioScale('Kesopanan','Kesopanan') +
+      radioScale('Keaktifan','Keaktifan') +
+      '<label>Catatan</label><textarea name="catatan"></textarea>' +
+      '<button type="button" id="sikapSave" class="primary">Simpan Penilaian</button>' +
+    '</form>'
+  );
+  $('sikapSave').onclick = function() {
+    genericFormSave($('sikapForm'), 'saveSikap');
+  };
+}
+
+function showRetorikaForm() {
+  if (['BPM','SENAT','SC','ADMIN'].indexOf(BM42.role) === -1) {
+    setStatus('Role ini tidak memiliki akses penilaian Retorika.', 'error');
+    return;
+  }
+
+  var fields = [
+    ['Tegas','Tegas'],['Kritis','Kritis'],['Percaya_Diri','Percaya diri'],
+    ['Wawasan_Luas','Wawasan luas'],['Ramah','Ramah'],['Sopan','Sopan'],
+    ['Serius','Serius'],['Keterbukaan_Masukan','Keterbukaan terhadap masukan'],
+    ['Pengendalian_Diri','Pengendalian diri']
+  ];
+
+  openForm(
+    'Retorika',
+    BM42.participant.id + ' • skala -3 sampai +3',
+    '<form id="retForm">' +
+      '<div><label>Pos</label><input name="post" placeholder="Contoh: Pos 01" required></div>' +
+      fields.map(function(f) { return radioScale(f[0], f[1]); }).join('') +
+      '<label>Catatan</label><textarea name="catatan"></textarea>' +
+      '<button type="button" id="retSave" class="primary">Simpan Penilaian</button>' +
+    '</form>'
+  );
+
+  $('retSave').onclick = function() { genericFormSave($('retForm'), 'saveRetorika'); };
+}
+
+function showProblemForm() {
+  if (['SC','ADMIN'].indexOf(BM42.role) === -1) {
+    setStatus('Problem Solving hanya dapat diisi oleh Steering Committee atau Admin.', 'error');
+    return;
+  }
+
+  var fields = [
+    ['Komunikasi','Komunikasi'],['Percaya_Diri','Percaya diri'],
+    ['Pemahaman_Bahasan','Pemahaman bahasan'],['Keaktifan','Keaktifan'],
+    ['Kritis','Berpikir kritis'],['Struktur_Berpikir','Struktur berpikir'],
+    ['Ketepatan_Solusi','Ketepatan solusi'],['Kolaborasi','Kolaborasi']
+  ];
+
+  openForm(
+    'Problem Solving',
+    BM42.participant.id + ' • evaluator: Steering Committee',
+    '<form id="problemForm">' +
+      '<div><label>Pos / sesi</label><input name="pos" placeholder="Contoh: Pos 01" required></div>' +
+      fields.map(function(f) { return radioScale(f[0], f[1]); }).join('') +
+      '<label>Catatan</label><textarea name="catatan"></textarea>' +
+      '<button type="button" id="problemSave" class="primary">Simpan Penilaian</button>' +
+    '</form>'
+  );
+
+  $('problemSave').onclick = function() { genericFormSave($('problemForm'), 'saveProblem'); };
+}
+
+function showPostTestForm() {
+  openForm(
+    'Post-Test',
+    BM42.participant.id + ' • ' + BM42.participant.name,
+    '<form id="postForm" class="grid-2">' +
+      '<div><label>Materi</label><select name="materi">' +
+        '<option>Materi 1</option><option>Materi 2</option><option>Materi 3</option>' +
+        '<option>Materi 4</option><option>Materi 5</option><option>Materi 6</option>' +
+      '</select></div>' +
+      '<div><label>Nilai</label><input name="nilai" type="number" min="0" max="100" required></div>' +
+      '<div class="full"><label>Catatan</label><textarea name="catatan"></textarea></div>' +
+      '<div class="full"><button type="button" id="postSave" class="primary">Simpan Nilai</button></div>' +
+    '</form>'
+  );
+
+  $('postSave').onclick = function() { genericFormSave($('postForm'), 'savePostTest'); };
+}
+
+function showTasksForm() {
+  openForm(
+    'Tugas',
+    'Tugas 1 & 4 = kelompok • Tugas 2 & 3 = individu',
+    '<div class="tabs">' +
+      '<button class="tab active" data-tasktab="individual">Tugas Individu</button>' +
+      '<button class="tab" data-tasktab="group">Tugas Kelompok</button>' +
+    '</div>' +
+    '<div id="taskTabBody"></div>'
+  );
+
+  document.querySelectorAll('.tab').forEach(function(tab) {
+    tab.onclick = function() {
+      document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      renderTaskTab(tab.getAttribute('data-tasktab'));
     };
+  });
 
-    const callback = async text => {
-      const now = Date.now();
-      if (text === state.lastToken && now - state.lastScanAt < BM42_SCAN_COOLDOWN_MS) return;
-      state.lastToken = text;
-      state.lastScanAt = now;
-      try {
-        const res = await api('searchParticipant', {q:text});
-        if (res.candidates.length === 1) {
-          renderParticipant(res.candidates[0]);
-          await closeCamera();
-        } else if (res.candidates.length === 0) {
-          setCameraFeedback('QR terbaca, tetapi peserta tidak ditemukan.', 'bad');
-        } else {
-          setCameraFeedback('QR terbaca. Pilih peserta dari hasil pencarian.');
-          await closeCamera();
-          $('searchResults').innerHTML = res.candidates.map(p => `<div class="candidate"><div class="candidate-main"><div class="candidate-name">${escapeHtml(p.id)} • ${escapeHtml(p.name)}</div><div class="candidate-meta">${escapeHtml(p.drug)} • ${escapeHtml(p.group)}</div></div><button class="secondary" data-id="${escapeHtml(p.id)}">Pilih</button></div>`).join('');
-          [...$('searchResults').querySelectorAll('button')].forEach(btn => btn.addEventListener('click', async () => {
-            const r = await api('searchParticipant', {q:btn.dataset.id});
-            if (r.candidates[0]) renderParticipant(r.candidates[0]);
-          }));
-        }
-      } catch(e) { setCameraFeedback(e.message, 'bad'); }
-    };
+  renderTaskTab('individual');
+}
 
-    const qrError = () => {};
-    setCameraFeedback('Menyalakan kamera...');
+function renderTaskTab(mode) {
+  if (mode === 'individual') {
+    $('taskTabBody').innerHTML =
+      '<form id="taskIndForm" class="grid-2">' +
+        '<div><label>Jenis tugas</label><select name="jenisTugas"><option>Tugas 2</option><option>Tugas 3</option></select></div>' +
+        '<div><label>Status pengumpulan</label><select name="statusPengumpulan"><option>Sudah dikumpulkan</option><option>Belum dikumpulkan</option></select></div>' +
+        '<div><label>Skor 1</label><input type="number" name="skor1" min="0" max="100"></div>' +
+        '<div><label>Skor 2</label><input type="number" name="skor2" min="0" max="100"></div>' +
+        '<div><label>Skor 3</label><input type="number" name="skor3" min="0" max="100"></div>' +
+        '<div class="full"><label>Catatan</label><textarea name="catatan"></textarea></div>' +
+        '<div class="full"><button type="button" id="taskIndSave" class="primary">Simpan Nilai Individu</button></div>' +
+      '</form>';
 
-    try {
-      // Pilih deviceId yang sudah terdeteksi agar browser tidak perlu menebak kamera.
-      if (state.selectedCameraId) {
-        await state.camera.start({deviceId:{exact:state.selectedCameraId}}, scanConfig, callback, qrError);
-      } else {
-        await state.camera.start({facingMode:{ideal:'environment'}}, scanConfig, callback, qrError);
-      }
+    $('taskIndSave').onclick = function() { genericFormSave($('taskIndForm'), 'saveTaskIndividual'); };
+  } else {
+    $('taskTabBody').innerHTML =
+      '<div class="grid-2">' +
+        '<div><label>Kelompok</label><select id="groupTaskGroup">' + groupOptions() + '</select></div>' +
+        '<div><label>Jenis tugas</label><select id="groupTaskType"><option>Tugas 1</option><option>Tugas 4</option></select></div>' +
+        '<div><label>Status pengumpulan</label><select id="groupTaskStatus"><option>Sudah dikumpulkan</option><option>Belum dikumpulkan</option></select></div>' +
+        '<div><label>Skor 1</label><input id="gt1" type="number" min="0" max="100"></div>' +
+        '<div><label>Skor 2</label><input id="gt2" type="number" min="0" max="100"></div>' +
+        '<div><label>Skor 3</label><input id="gt3" type="number" min="0" max="100"></div>' +
+        '<div class="full"><label>Catatan</label><textarea id="gtNote"></textarea></div>' +
+        '<div class="full"><button id="groupTaskSave" class="primary">Simpan Nilai Kelompok</button></div>' +
+      '</div>';
 
-      state.scanning = true;
-      const ready = await waitForVideoReady();
-      if (!ready) {
-        throw new Error('Kamera aktif tetapi gambar video tidak tersedia. Coba Ganti Kamera atau Coba Lagi.');
-      }
-      $('cameraFeedback').textContent = 'Kamera aktif. Arahkan QR peserta ke kotak pemindaian.';
-      $('cameraFeedback').style.color = '#166534';
-    } catch (e) {
-      try {
-        if (state.scanning || state.camera) await state.camera.stop();
-      } catch (_) {}
-      try { state.camera?.clear(); } catch (_) {}
-      state.scanning = false;
-      state.camera = null;
-      throw e;
-    }
-  }
+    $('groupTaskSave').onclick = function() {
+      var data = {
+        op: 'saveTaskGroup',
+        evaluatorId: BM42.evaluatorId,
+        role: BM42.role,
+        group: $('groupTaskGroup').value,
+        jenisTugas: $('groupTaskType').value,
+        statusPengumpulan: $('groupTaskStatus').value,
+        skor1: $('gt1').value,
+        skor2: $('gt2').value,
+        skor3: $('gt3').value,
+        catatan: $('gtNote').value
+      };
 
-  async function openCamera() {
-    $('cameraModal').classList.remove('hidden');
-    $('cameraSelect').disabled = true;
-    $('switchCameraBtn').disabled = true;
-    setCameraFeedback('Memeriksa izin dan perangkat kamera...');
-    if (!window.Html5Qrcode) {
-      setCameraFeedback('Pustaka pemindai QR tidak termuat.', 'bad');
-      return;
-    }
-
-    try {
-      await prepareCameraDevices();
-
-      // Coba kamera yang paling mungkin merupakan kamera belakang terlebih dahulu.
-      // Jika preview tidak muncul, coba kamera lain secara otomatis sebelum menyerah.
-      let lastError = null;
-      for (let i = 0; i < state.cameras.length; i++) {
-        state.selectedCameraId = state.cameras[i].deviceId;
-        $('cameraSelect').value = state.selectedCameraId;
-        try {
-          await startSelectedCamera();
-          return;
-        } catch (err) {
-          lastError = err;
-        }
-      }
-
-      throw lastError || new Error('Tidak ada kamera yang berhasil menampilkan video.');
-    } catch (e) {
-      const name = e?.name || 'KAMERA_ERROR';
-      let hint = e?.message || 'Kamera gagal dibuka.';
-      if (name === 'NotAllowedError') hint = 'Izin kamera ditolak. Periksa izin kamera untuk browser dan situs ini.';
-      else if (name === 'NotReadableError') hint = 'Kamera sedang digunakan aplikasi lain atau tidak dapat dibaca. Tutup aplikasi kamera lain lalu tekan Coba Lagi.';
-      else if (name === 'OverconstrainedError') hint = 'Kamera yang dipilih tidak dapat digunakan. Tekan Ganti Kamera atau Coba Lagi.';
-      else if (name === 'SecurityError') hint = 'Browser memblokir akses kamera karena kebijakan keamanan.';
-      setCameraFeedback(`${name}: ${hint}`, 'bad');
-    }
-  }
-
-  async function restartCameraWithSelected() {
-    try {
-      if (state.scanning && state.camera) {
-        await state.camera.stop();
-        state.camera.clear();
-        state.scanning = false;
-      }
-      state.camera = new Html5Qrcode('participantReader');
-      await startSelectedCamera();
-    } catch (e) {
-      const name = e?.name || 'KAMERA_ERROR';
-      setCameraFeedback(`${name}: ${e?.message || 'Kamera gagal dimulai ulang.'}`, 'bad');
-    }
-  }
-
-  async function cycleCamera() {
-    if (state.cameras.length < 2) {
-      setCameraFeedback('Perangkat ini hanya melaporkan satu kamera.', 'neutral');
-      return;
-    }
-    const currentIndex = state.cameras.findIndex(d => d.deviceId === state.selectedCameraId);
-    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % state.cameras.length : 0;
-    state.selectedCameraId = state.cameras[nextIndex].deviceId;
-    $('cameraSelect').value = state.selectedCameraId;
-    await restartCameraWithSelected();
-  }
-
-  async function closeCamera() {
-    if (state.camera) {
-      try { if (state.scanning) await state.camera.stop(); } catch (_) {}
-      try { state.camera.clear(); } catch (_) {}
-    }
-    state.scanning = false;
-    state.camera = null;
-    $('cameraSelect').disabled = true;
-    $('switchCameraBtn').disabled = true;
-    $('cameraModal').classList.add('hidden');
-  }
-
-  function auditComponentOptions(component){
-    const map={
-      'Post-Test':['Materi 1','Materi 2','Materi 3','Materi 4','Materi 5','Materi 6'],
-      'Sikap Peserta':['Keseluruhan BM','Hari 1','Hari 2'],
-      'Tugas':['ESAI','VIDEO','LINKEDIN'],
-      'Retorika':Array.from({length:20},(_,i)=>`Post ${String(i+1).padStart(2,'0')}`),
-      'Problem Solving':Array.from({length:20},(_,i)=>`Pos ${String(i+1).padStart(2,'0')}`)
-    };
-    return map[component]||[];
-  }
-
-  function openAudit(){
-    $('auditSection').classList.remove('hidden');
-    $('auditBody').innerHTML=`
-      <div class="audit-toolbar">
-        <div class="field"><label>Komponen</label><select id="auditComponent" class="input">${['Post-Test','Sikap Peserta','Tugas','Retorika','Problem Solving'].map(x=>`<option>${x}</option>`).join('')}</select></div>
-        <div class="field"><label>Bagian</label><select id="auditUnit" class="input"></select></div>
-        <div class="field"><label>Kelompok</label><select id="auditGroup" class="input"><option value="">Semua Kelompok</option>${Array.from({length:20},(_,i)=>`<option>G${String(i+1).padStart(2,'0')}</option>`).join('')}</select></div>
-        <div class="field" style="align-self:end"><button id="runAuditBtn" class="primary" style="width:100%">Periksa</button></div>
-      </div>
-      <div class="audit-actions">
-        <button id="refreshAuditBtn" class="secondary" type="button">Muat Ulang Status</button>
-      </div>
-      <div id="auditResult"></div>`;
-    const comp=$('auditComponent'), unit=$('auditUnit');
-    const refreshUnits=()=>{unit.innerHTML=auditComponentOptions(comp.value).map(x=>`<option>${x}</option>`).join('');};
-    comp.addEventListener('change',refreshUnits);
-    refreshUnits();
-    $('runAuditBtn').addEventListener('click',runAudit);
-    $('refreshAuditBtn').addEventListener('click',runAudit);
-    window.scrollTo({top:$('auditSection').offsetTop-10,behavior:'smooth'});
-  }
-
-  async function runAudit(){
-    const result=$('auditResult');
-
-    result.innerHTML='<div class="small muted">Memeriksa status penilaian...</div>';
-    try{
-
-      const res=await api('auditAssessment',{component:$('auditComponent').value,unit:$('auditUnit').value,group:$('auditGroup').value});
-      renderAuditResult(result, res);
-    }catch(e){result.innerHTML=`<div class="small" style="color:#b91c1c">${escapeHtml(e.message)}</div>`;}
-  }
-
-
-  function renderAuditResult(result, res){
-    const missing = Array.isArray(res.missing) ? res.missing : [];
-    const grouped = {};
-    missing.forEach(p=>{
-      const g=p.group || 'Tanpa Kelompok';
-      if(!grouped[g]) grouped[g]=[];
-      grouped[g].push(p);
-    });
-
-    const groups = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
-
-    result.innerHTML=`
-      <div class="audit-summary">
-        <div class="audit-metric"><div class="small">Peserta wajib</div><div class="num">${res.total}</div></div>
-        <div class="audit-metric"><div class="small">Sudah dinilai</div><div class="num" style="color:#166534">${res.complete}</div></div>
-        <div class="audit-metric"><div class="small">Belum dinilai</div><div class="num" style="color:#b91c1c">${res.missingCount}</div></div>
-      </div>
-
-      ${res.missingCount ? `
-        <div class="audit-toolbar">
-          <div class="small"><strong>${escapeHtml(res.component)}</strong> • ${escapeHtml(res.unit)}${$('auditGroup').value ? ' • Kelompok '+escapeHtml($('auditGroup').value) : ''}</div>
-          <div class="actions">
-            <button id="auditCopyBtn" class="secondary">Salin Daftar</button>
-          </div>
-        </div>
-
-        <div class="audit-group-list">
-          ${groups.map(group=>`
-            <div class="audit-group-block">
-              <div class="audit-group-title">
-                <span>${escapeHtml(group)}</span>
-                <span class="badge-warn">${grouped[group].length} belum</span>
-              </div>
-              <div class="audit-list">
-                ${grouped[group].map((p,i)=>`
-                  <div class="audit-row">
-                    <div class="audit-no">${i+1}</div>
-                    <div class="audit-person">
-                      <strong>${escapeHtml(p.id)} • ${escapeHtml(p.name)}</strong>
-                      <span>${escapeHtml(p.drug || '')}</span>
-                    </div>
-                    <button class="secondary audit-select" data-id="${escapeHtml(p.id)}">Nilai</button>
-                  </div>`).join('')}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      ` : `
-        <div class="audit-complete">
-          <strong>Semua peserta yang diwajibkan sudah memiliki nilai.</strong>
-          <div class="small muted">${escapeHtml(res.component)} • ${escapeHtml(res.unit)}</div>
-        </div>
-      `}
-    `;
-
-    $('auditCopyBtn')?.addEventListener('click',async()=>{
-      const text=missing.map(p=>`${p.id}\t${p.name}\t${p.drug||''}\t${p.group||''}`).join('\n');
-      try{await navigator.clipboard.writeText(text);showFeedback('ok','Daftar peserta berhasil disalin.');}
-      catch(_){showFeedback('bad','Daftar tidak dapat disalin otomatis.');}
-    });
-
-    result.querySelectorAll('.audit-select').forEach(btn=>{
-      btn.addEventListener('click',async()=>{
-        try{
-          const r=await api('searchParticipant',{q:btn.dataset.id});
-          if(r.candidates?.[0]){
-            renderParticipant(r.candidates[0]);
-            $('auditSection')?.classList.add('hidden');
-            // Buka modul yang sedang diaudit, jika tersedia.
-            const comp=$('auditComponent')?.value;
-            if(comp==='Post-Test') openModule('Post-Test', $('auditUnit')?.value || '');
-            else if(comp==='Sikap Peserta') openModule('Sikap Peserta', $('auditUnit')?.value || '');
-            else if(comp==='Tugas') openModule('Tugas', $('auditUnit')?.value || '');
-            else if(comp==='Retorika') openModule('Retorika', $('auditUnit')?.value || '');
-            else if(comp==='Problem Solving') openModule('Problem Solving', $('auditUnit')?.value || '');
-          }
-        }catch(e){showFeedback('bad',e.message);}
+      setStatus('Menyimpan nilai kelompok...');
+      api('assessment', data).then(function(r) {
+        if (!r.ok) throw new Error(r.message || 'Gagal menyimpan.');
+        setStatus(r.message, 'ok');
+      }).catch(function(err) {
+        setStatus(err.message, 'error');
       });
+    };
+  }
+}
+
+function groupOptions() {
+  var out = '<option value="">Pilih kelompok</option>';
+  for (var i = 1; i <= 20; i++) {
+    var g = 'G' + String(i).padStart(2, '0');
+    out += '<option value="' + g + '">' + g + '</option>';
+  }
+  return out;
+}
+
+function showIncidentForm() {
+  openForm(
+    'Catatan Kejadian',
+    BM42.participant.id + ' • catatan harus faktual dan spesifik',
+    '<form id="incidentForm">' +
+      '<div class="grid-2">' +
+        '<div><label>Aktivitas</label><input name="aktivitas" placeholder="Contoh: Retorika • Pos 04"></div>' +
+        '<div><label>Kategori</label><select name="kategori">' +
+          '<option>Disiplin</option><option>Atribut</option><option>Kesopanan</option>' +
+          '<option>Tanggung jawab</option><option>Kepatuhan instruksi</option>' +
+          '<option>Profesionalisme</option><option>Lainnya</option>' +
+        '</select></div>' +
+        '<div><label>Tingkat</label><select name="tingkat"><option>Ringan</option><option>Sedang</option><option>Berat</option></select></div>' +
+        '<div><label>Tautan bukti</label><input name="tautanBukti" placeholder="https://..."></div>' +
+        '<div class="full"><label>Uraian kejadian</label><textarea name="uraian" required></textarea></div>' +
+      '</div>' +
+      '<button type="button" id="incidentSave" class="primary">Simpan Catatan</button>' +
+    '</form>'
+  );
+  $('incidentSave').onclick = function() { genericFormSave($('incidentForm'), 'saveIncident'); };
+}
+
+function showAssignmentForm() {
+  if (['OC','PERSONALIA','ADMIN'].indexOf(BM42.role) === -1) {
+    setStatus('Menu Pembagian Post-Test hanya untuk OC, Personalia, dan Admin.', 'error');
+    return;
+  }
+
+  openForm(
+    'Pembagian Post-Test',
+    'Kelompok berdiskusi terlebih dahulu. Sistem hanya memvalidasi dan mencatat keputusan.',
+    '<div class="grid-2">' +
+      '<div><label>Kelompok</label><select id="assignmentGroup">' + groupOptions() + '</select></div>' +
+      '<div><label>Status</label><strong id="assignmentState" class="state">BELUM DIKUNCI</strong></div>' +
+    '</div>' +
+    '<div class="counter-grid">' +
+      '<div>Materi 4<strong id="c4">0/4</strong></div>' +
+      '<div>Materi 5<strong id="c5">0/3</strong></div>' +
+      '<div>Materi 6<strong id="c6">0/3</strong></div>' +
+    '</div>' +
+    '<div id="assignmentRows" class="assignment-rows">Pilih kelompok.</div>' +
+    '<div class="inline">' +
+      '<button id="saveDraftAssignment" class="secondary">Simpan Draft</button>' +
+      '<button id="lockAssignment" class="primary">Simpan & Kunci</button>' +
+      '<button id="unlockAssignment" class="warning hidden">Buka Kunci (Admin)</button>' +
+    '</div>'
+  );
+
+  $('assignmentGroup').onchange = loadAssignment;
+  $('saveDraftAssignment').onclick = function() { saveAssignment('DRAFT'); };
+  $('lockAssignment').onclick = function() { saveAssignment('LOCKED'); };
+  $('unlockAssignment').onclick = function() { unlockAssignment(); };
+}
+
+function loadAssignment() {
+  var group = $('assignmentGroup').value;
+  if (!group) {
+    $('assignmentRows').innerHTML = 'Pilih kelompok.';
+    return;
+  }
+
+  setStatus('Memuat anggota ' + group + '...');
+  api('assessment', {
+    op: 'getPostTestAssignment',
+    group: group
+  }).then(function(r) {
+    if (!r.ok) throw new Error(r.message || 'Gagal memuat assignment.');
+
+    $('assignmentState').textContent = r.locked ? 'TERKUNCI' : 'BELUM DIKUNCI';
+    $('assignmentState').className = 'state ' + (r.locked ? 'locked' : 'draft');
+
+    $('assignmentRows').innerHTML = r.assignments.map(function(x) {
+      return '<div class="assignment-row">' +
+        '<div><b>' + esc(x.participant.id) + '</b> ' + esc(x.participant.name) +
+          '<small>' + esc(x.participant.drug) + '</small></div>' +
+        '<select class="assign-select" data-pid="' + esc(x.participantId) + '"' + (r.locked ? ' disabled' : '') + '>' +
+          '<option value="">Pilih...</option>' +
+          '<option value="Materi 4"' + (x.materi === 'Materi 4' ? ' selected' : '') + '>Materi 4</option>' +
+          '<option value="Materi 5"' + (x.materi === 'Materi 5' ? ' selected' : '') + '>Materi 5</option>' +
+          '<option value="Materi 6"' + (x.materi === 'Materi 6' ? ' selected' : '') + '>Materi 6</option>' +
+        '</select>' +
+      '</div>';
+    }).join('');
+
+    document.querySelectorAll('.assign-select').forEach(function(s) {
+      s.onchange = updateAssignmentCounters;
     });
+
+    updateAssignmentCounters();
+
+    $('unlockAssignment').classList.toggle('hidden', !(r.locked && BM42.role === 'ADMIN'));
+    $('saveDraftAssignment').disabled = r.locked;
+    $('lockAssignment').disabled = r.locked;
+
+    setStatus('Assignment ' + group + ' berhasil dimuat.', 'ok');
+  }).catch(function(err) {
+    setStatus(err.message, 'error');
+  });
+}
+
+function updateAssignmentCounters() {
+  var c4 = 0, c5 = 0, c6 = 0;
+  document.querySelectorAll('.assign-select').forEach(function(s) {
+    if (s.value === 'Materi 4') c4++;
+    if (s.value === 'Materi 5') c5++;
+    if (s.value === 'Materi 6') c6++;
+  });
+  $('c4').textContent = c4 + '/4';
+  $('c5').textContent = c5 + '/3';
+  $('c6').textContent = c6 + '/3';
+}
+
+function collectAssignments() {
+  return Array.from(document.querySelectorAll('.assign-select')).map(function(s) {
+    return {
+      participantId: s.getAttribute('data-pid'),
+      materi: s.value
+    };
+  });
+}
+
+function saveAssignment(mode) {
+  var group = $('assignmentGroup').value;
+  var assignments = collectAssignments();
+
+  if (!group) {
+    setStatus('Pilih kelompok.', 'error');
+    return;
   }
 
-  async function auditCurrentParticipant(){
-    if(!state.participant){showFeedback('bad','Pilih peserta terlebih dahulu.');return;}
-    try{
-      const res=await api('auditParticipant',{participantId:state.participant.id});
-      const missing=res.items.filter(x=>x.status==='BELUM DINILAI');
-      const lines=res.items.map(x=>`<div class="audit-row ${x.status==='LENGKAP'?'ok':'bad'}"><div class="component">${escapeHtml(x.component)}</div><div class="unit">${escapeHtml(x.unit)}</div><div class="${x.status==='LENGKAP'?'status-complete':'status-missing'}">${escapeHtml(x.status)}</div>${x.status==='BELUM DINILAI'?`<button class="secondary participant-audit-value" data-component="${escapeHtml(x.component)}" data-unit="${escapeHtml(x.unit)}">Nilai</button>`:''}</div>`).join('');
-      $('auditSection').classList.remove('hidden');
-      $('auditBody').innerHTML=`<div class="audit-participant-card"><div class="candidate-name">${escapeHtml(res.participant.id)} • ${escapeHtml(res.participant.name)}</div><div class="candidate-meta">${escapeHtml(res.participant.drug)} • ${escapeHtml(res.participant.group)}</div><div class="audit-summary"><div class="audit-metric"><div class="small">Komponen wajib</div><div class="num">${res.items.length}</div></div><div class="audit-metric"><div class="small">Sudah lengkap</div><div class="num" style="color:#166534">${res.items.length-missing.length}</div></div><div class="audit-metric"><div class="small">Belum dinilai</div><div class="num" style="color:#b91c1c">${missing.length}</div></div></div><div class="audit-checklist">${lines}</div></div>`;
-      $('auditBody').querySelectorAll('.participant-audit-value').forEach(btn=>btn.addEventListener('click',()=>{
-        $('auditSection').classList.add('hidden');
-        openModule(btn.dataset.component,btn.dataset.unit);
-      }));
-      window.scrollTo({top:$('auditSection').offsetTop-10,behavior:'smooth'});
-    }catch(e){showFeedback('bad',e.message);}
+  setStatus('Memvalidasi pembagian 4–3–3...');
+  api('assessment', {
+    op: 'savePostTestAssignment',
+    group: group,
+    mode: mode,
+    assignmentsJson: JSON.stringify(assignments),
+    evaluatorId: BM42.evaluatorId,
+    role: BM42.role
+  }).then(function(r) {
+    if (!r.ok) throw new Error(r.message || 'Gagal menyimpan assignment.');
+    setStatus(mode === 'LOCKED' ? 'Pembagian berhasil disimpan dan dikunci.' : 'Draft pembagian berhasil disimpan.', 'ok');
+    loadAssignment();
+  }).catch(function(err) {
+    setStatus(err.message, 'error');
+  });
+}
+
+function unlockAssignment() {
+  var group = $('assignmentGroup').value;
+  if (BM42.role !== 'ADMIN') {
+    setStatus('Hanya Admin yang dapat membuka kunci.', 'error');
+    return;
   }
 
-  function openModule(title, unitHint='') {
-    if (!state.participant) { showFeedback('bad','Pilih peserta terlebih dahulu.'); return; }
-    $('formSection').classList.remove('hidden');
-    $('formTitle').textContent = title;
-    $('formSubtitle').textContent = `${state.participant.id} • ${state.participant.name} • ${state.participant.drug}`;
-    if (title === 'Keaktifan Materi') renderParticipationForm(unitHint);
-    else if (title === 'Post-Test') renderPosttestForm(unitHint);
-    else if (title === 'Retorika') renderRetorikaForm(unitHint);
-    else if (title === 'Sikap Peserta') renderSikapForm(unitHint);
-    else if (title === 'Problem Solving') renderPSForm(unitHint);
-    else if (title === 'Tugas') renderTaskForm(unitHint);
-    else renderIncidentForm(unitHint);
-    window.scrollTo({top: $('formSection').offsetTop - 10, behavior:'smooth'});
+  setStatus('Membuka kunci assignment...');
+  api('assessment', {
+    op: 'unlockPostTestAssignment',
+    group: group,
+    evaluatorId: BM42.evaluatorId,
+    role: BM42.role
+  }).then(function(r) {
+    if (!r.ok) throw new Error(r.message || 'Gagal membuka kunci.');
+    setStatus('Assignment dibuka kembali. Silakan revisi.', 'ok');
+    loadAssignment();
+  }).catch(function(err) {
+    setStatus(err.message, 'error');
+  });
+}
+
+function showParticipantAudit() {
+  if (!BM42.participant) {
+    setStatus('Pilih peserta terlebih dahulu.', 'error');
+    return;
   }
 
-  function formActions(onSave, label='Simpan') {
-    const wrap = document.createElement('div'); wrap.className='actions';
-    const btn = document.createElement('button'); btn.className='primary'; btn.textContent=label;
-    btn.addEventListener('click', onSave); wrap.appendChild(btn); return wrap;
-  }
+  openForm(
+    'Audit Kelengkapan Peserta',
+    BM42.participant.id + ' • ' + BM42.participant.name,
+    '<div id="participantAuditResult" class="loading">Memeriksa...</div>'
+  );
 
-  function renderParticipationForm(unitHint='') {
-    const body = $('formBody');
-    body.innerHTML = `
-      <div class="form-grid">
-        <div class="field"><label>Materi</label><select id="partActivity" class="input">${['Materi I','Materi II','Materi III','Materi IV','Materi V','Materi VI'].map(x=>`<option>${x}</option>`).join('')}</select></div>
-        <div class="field"><label>Jenis aktivitas</label><div class="radio-grid" id="partType">${['BERTANYA','MENANGGAPI','MENJAWAB'].map((x,i)=>`<button type="button" class="radio-btn ${i===0?'active':''}" data-value="${x}">${x[0]+x.slice(1).toLowerCase()}</button>`).join('')}</div></div>
-        <div class="field form-full"><label>Catatan singkat (opsional)</label><textarea id="partNote" class="input textarea" placeholder="Misalnya: pertanyaan terkait pembagian peran organisasi"></textarea></div>
-      </div>`;
-    bindRadioButtons('partType');
-    body.querySelector('select#postMateri')?.addEventListener('change',()=>{});
-    body.appendChild(formActions(async()=>{
-      const selected = getRadioValue('partType');
-      await saveGeneric('saveParticipation',{aktivitas:$('partActivity').value,jenis:selected,catatan:$('partNote').value},'Aktivitas peserta tersimpan.');
-    },'Catat Aktivitas'));
-  }
+  api('assessment', {
+    op: 'auditParticipant',
+    participantId: BM42.participant.id
+  }).then(function(r) {
+    if (!r.ok) throw new Error(r.message || 'Audit gagal.');
+    $('participantAuditResult').innerHTML =
+      '<div class="audit-grid">' +
+      r.items.map(function(x) {
+        return '<div class="audit-item ' + (x.actionRequired ? 'missing' : 'done') + '">' +
+          '<span>' + esc(x.component) + '</span><strong>' + x.status + '</strong>' +
+        '</div>';
+      }).join('') +
+      '</div>';
+  }).catch(function(err) {
+    $('participantAuditResult').innerHTML = '<div class="error-box">' + esc(err.message) + '</div>';
+  });
+}
 
-  function renderPosttestForm(unitHint='') {
-    const body = $('formBody');
-    body.innerHTML = `<div class="form-grid"><div class="field"><label>Materi</label><select id="postMateri" class="input">${[1,2,3,4,5,6].map(x=>`<option ${unitHint===`Materi ${x}`?'selected':''}>Materi ${x}</option>`).join('')}</select></div><div class="field"><label>Nilai</label><input id="postScore" class="score-input" type="number" min="0" max="100" placeholder="0–100"></div><div class="field form-full"><label>Catatan (opsional)</label><textarea id="postNote" class="input textarea"></textarea></div></div>`;
-    body.appendChild(formActions(async()=>{
-      await saveGeneric('savePosttest',{materi:$('postMateri').value,nilai:$('postScore').value,catatan:$('postNote').value},'Nilai post-test tersimpan.');
-    }));
-  }
+function showAuditComponent() {
+  openForm(
+    'Audit Kelengkapan',
+    'Gunakan filter agar daftar peserta yang belum dinilai langsung muncul.',
+    '<div class="grid-2">' +
+      '<div><label>Komponen</label><select id="auditComponent">' +
+        '<option>Post-Test</option><option>Tugas</option><option>Sikap Peserta</option>' +
+        '<option>Retorika</option><option>Problem Solving</option><option>Keaktifan Materi</option>' +
+      '</select></div>' +
+      '<div><label>Unit / bagian</label><input id="auditUnit" placeholder="Contoh: Materi 4 / Tugas 1 / Pos 01"></div>' +
+      '<div><label>Kelompok</label><select id="auditGroup">' + groupOptions().replace('Pilih kelompok','Semua Kelompok') + '</select></div>' +
+      '<div class="align-end"><button id="auditRun" class="primary">Periksa</button></div>' +
+    '</div>' +
+    '<div id="auditComponentResult"></div>'
+  );
 
-  function renderRetorikaForm(unitHint='') {
-    const body = $('formBody');
-    body.innerHTML = `<div class="form-grid"><div class="field"><label>Post</label><select id="retPost" class="input">${Array.from({length:20},(_,i)=>{const v='Post '+String(i+1).padStart(2,'0');return `<option value="${v}" ${unitHint===v?'selected':''}>${v}</option>`}).join('')}</select></div></div><div style="margin-top:14px" id="retAspects"></div><div class="field" style="margin-top:14px"><label>Catatan umum</label><textarea id="retNote" class="input textarea" placeholder="Catatan perilaku yang paling menonjol"></textarea></div>`;
-    const wrap = $('retAspects');
-    retorikaAspects.forEach(([key,label]) => wrap.appendChild(scaleBlock(key,label)));
-    body.appendChild(formActions(async()=>{
-      const params = {post:$('retPost').value,catatan:$('retNote').value};
-      retorikaAspects.forEach(([key])=>params[key]=getScaleValue(key));
-      await saveGeneric('saveRetorika',params,'Penilaian retorika tersimpan.');
-    }));
-  }
+  $('auditRun').onclick = function() {
+    var component = $('auditComponent').value;
+    var unit = $('auditUnit').value.trim();
+    var group = $('auditGroup').value || 'Semua Kelompok';
 
-  function renderSikapForm(unitHint='') {
-    const body = $('formBody');
-    body.innerHTML = `<div class="form-grid"><div class="field"><label>Periode</label><select id="sikapPeriode" class="input"><option ${unitHint==='Keseluruhan BM'?'selected':''}>Keseluruhan BM</option><option ${unitHint==='Hari 1'?'selected':''}>Hari 1</option><option ${unitHint==='Hari 2'?'selected':''}>Hari 2</option></select></div></div><div style="margin-top:14px" id="sikapAspects"></div><div class="field" style="margin-top:14px"><label>Catatan</label><textarea id="sikapNote" class="input textarea"></textarea></div>`;
-    [['disiplin','Disiplin'],['atribut','Atribut'],['kesopanan','Kesopanan'],['keaktifan','Keaktifan']].forEach(([key,label])=>{
-      $('sikapAspects').appendChild(scaleBlock(key,label));
+    $('auditComponentResult').innerHTML = '<div class="loading">Memeriksa...</div>';
+
+    api('assessment', {
+      op: 'auditComponent',
+      component: component,
+      unit: unit,
+      group: group
+    }).then(function(r) {
+      if (!r.ok) throw new Error(r.message || 'Audit gagal.');
+
+      $('auditComponentResult').innerHTML =
+        '<div class="audit-summary"><b>' + r.complete + '/' + r.total + '</b> lengkap • <b>' + r.missingCount + '</b> belum dinilai</div>' +
+        (r.missing.length ? r.missing.map(function(x) {
+          return '<div class="missing-row"><b>' + esc(x.id) + '</b> ' + esc(x.name) +
+            '<small>' + esc(x.group) + ' • ' + esc(x.drug) + '</small></div>';
+        }).join('') : '<div class="success-box">Semua peserta pada filter tersebut sudah lengkap.</div>');
+    }).catch(function(err) {
+      $('auditComponentResult').innerHTML = '<div class="error-box">' + esc(err.message) + '</div>';
     });
-    body.appendChild(formActions(async()=>{
-      await saveGeneric('saveSikap',{
-        periode:$('sikapPeriode').value,
-        disiplin:getScaleValue('disiplin'),
-        atribut:getScaleValue('atribut'),
-        kesopanan:getScaleValue('kesopanan'),
-        keaktifan:getScaleValue('keaktifan'),
-        catatan:$('sikapNote').value
-      },'Penilaian sikap tersimpan.');
-    }));
-  }
+  };
+}
 
-  function renderPSForm(unitHint='') {
-    const body=$('formBody');
-    body.innerHTML=`<div class="form-grid"><div class="field"><label>Pos problem solving</label><select id="psPos" class="input">${Array.from({length:20},(_,i)=>{const v='Pos '+String(i+1).padStart(2,'0');return `<option value="${v}" ${unitHint===v?'selected':''}>${v}</option>`}).join('')}</select></div></div><div style="margin-top:14px" id="psAspects"></div><div class="field" style="margin-top:14px"><label>Catatan umum</label><textarea id="psNote" class="input textarea"></textarea></div>`;
-    psAspects.forEach(([key,label])=>$('psAspects').appendChild(scaleBlock(key,label)));
-    body.appendChild(formActions(async()=>{const params={pos:$('psPos').value,catatan:$('psNote').value};psAspects.forEach(([key])=>params[key]=getScaleValue(key));await saveGeneric('saveProblemSolving',params,'Penilaian problem solving tersimpan.');}));
-  }
+function showRanking() {
+  openForm(
+    'Top 10 & Rekap Kelompok',
+    'Hanya peserta dan kelompok yang lengkap yang dapat masuk ranking.',
+    '<button id="reloadRanking" class="primary">Muat Rekap</button>' +
+    '<div id="rankingBody" class="loading">Tekan Muat Rekap.</div>'
+  );
 
-  function renderTaskForm(unitHint='') {
-    const body=$('formBody');
-    body.innerHTML=`<div class="form-grid"><div class="field"><label>Jenis tugas</label><select id="taskType" class="input"><option value="ESAI">Esai</option><option value="VIDEO">Video</option><option value="LINKEDIN">Post blog LinkedIn</option></select></div><div class="field"><label>Status pengumpulan</label><select id="taskStatus" class="input"><option>Sudah dikumpulkan</option><option>Dikumpulkan terlambat</option><option>Belum dikumpulkan</option><option>Tidak dinilai</option></select></div></div><div id="taskScores" style="margin-top:14px"></div><div class="actions"><button id="saveTaskBtn" class="primary">Simpan Penilaian Tugas</button></div>`;
-    renderTaskFields();
-    $('taskType').addEventListener('change',renderTaskFields);
-    $('saveTaskBtn').addEventListener('click',async()=>{const type=$('taskType').value;const payload={jenisTugas:type,statusPengumpulan:$('taskStatus').value,skor1:$('task1').value,skor2:$('task2').value,skor3:$('task3').value,dataMentah1:$('raw1')?.value||'',dataMentah2:$('raw2')?.value||'',catatan:$('taskNote').value};await saveGeneric('saveTask',payload,'Penilaian tugas tersimpan.');});
-  }
+  $('reloadRanking').onclick = function() {
+    $('rankingBody').innerHTML = '<div class="loading">Memuat ranking...</div>';
 
-  function renderTaskFields(){const type=$('taskType').value;const def={ESAI:[['Kelengkapan materi',40],['Kejelasan tulisan / keterbacaan',30],['Kelengkapan jumlah kata',30]],VIDEO:[['Kreativitas',50],['Isi materi',50]],LINKEDIN:[['Kesesuaian materi',50],['Kesesuaian jumlah kata',10],['Kesesuaian jumlah akun terhubung',40]]}[type];$('taskScores').innerHTML=def.map((x,i)=>`<div class="field" style="margin-bottom:10px"><label>${x[0]} (maks. ${x[1]})</label><input id="task${i+1}" class="score-input" type="number" min="0" max="${x[1]}" value="0"></div>`).join('')+((type==='LINKEDIN')?`<div class="form-grid"><div class="field"><label>Jumlah kata aktual (opsional)</label><input id="raw1" class="score-input" type="number" min="0"></div><div class="field"><label>Jumlah akun terhubung (opsional)</label><input id="raw2" class="score-input" type="number" min="0"></div></div>`:`<div class="field"><label>Data mentah / catatan (opsional)</label><input id="raw1" class="input"><input id="raw2" style="display:none"></div>`)+`<div class="field"><label>Catatan</label><textarea id="taskNote" class="input textarea"></textarea></div><div class="task-total">Total: <span id="taskTotal">0</span> / 100</div>`;[1,2,3].forEach(i=>{const el=$(`task${i}`);if(el)el.addEventListener('input',()=>{$('taskTotal').textContent=[1,2,3].reduce((s,n)=>s+Number($(`task${n}`)?.value||0),0);});});}
+    Promise.all([
+      api('assessment', { op: 'top10' }),
+      api('assessment', { op: 'groupRanking' })
+    ]).then(function(results) {
+      var top = results[0];
+      var groups = results[1];
+      if (!top.ok) throw new Error(top.message || 'Gagal memuat Top 10.');
+      if (!groups.ok) throw new Error(groups.message || 'Gagal memuat ranking kelompok.');
 
-  function renderIncidentForm(){const body=$('formBody');body.innerHTML=`<div class="form-grid"><div class="field"><label>Aktivitas</label><input id="incActivity" class="input" placeholder="Contoh: Retorika • Post 04"></div><div class="field"><label>Kategori</label><select id="incCategory" class="input"><option>Disiplin</option><option>Atribut</option><option>Kesopanan</option><option>Tanggung jawab</option><option>Kepatuhan instruksi</option><option>Profesionalisme</option><option>Lainnya</option></select></div><div class="field"><label>Tingkat</label><div class="radio-grid" id="incSeverity">${['Ringan','Sedang','Berat'].map((x,i)=>`<button type="button" class="radio-btn ${i===0?'active':''}" data-value="${x}">${x}</button>`).join('')}</div></div><div class="field form-full"><label>Uraian kejadian</label><textarea id="incText" class="input textarea" placeholder="Tuliskan kejadian secara faktual, singkat, dan spesifik."></textarea></div><div class="field form-full"><label>Tautan bukti (opsional)</label><input id="incEvidence" class="input" placeholder="Tautan Drive / bukti"></div></div>`;bindRadioButtons('incSeverity');body.appendChild(formActions(async()=>{await saveGeneric('saveIncident',{aktivitas:$('incActivity').value,kategori:$('incCategory').value,tingkat:getRadioValue('incSeverity'),uraian:$('incText').value,tautanBukti:$('incEvidence').value},'Catatan kejadian tersimpan.');}));}
+      $('rankingBody').innerHTML =
+        '<h3>Top 10 Peserta</h3>' +
+        (top.rows.length ? top.rows.map(function(x) {
+          return '<div class="rank-row"><b>#' + x.rank + '</b><span>' + esc(x.name) +
+            '<small>' + esc(x.participantId) + ' • ' + esc(x.group) + '</small></span>' +
+            '<strong>' + x.finalScore.toFixed(2) + '</strong></div>';
+        }).join('') : '<div>Belum ada peserta lengkap.</div>') +
+        '<h3>Ranking Kelompok</h3>' +
+        (groups.rows.length ? groups.rows.map(function(x) {
+          return '<div class="rank-row"><b>#' + x.rank + '</b><span>' + esc(x.group) +
+            '<small>' + x.complete + '/' + x.participants + ' lengkap</small></span>' +
+            '<strong>' + x.averageFinal.toFixed(2) + '</strong></div>';
+        }).join('') : '<div>Belum ada kelompok lengkap.</div>');
+    }).catch(function(err) {
+      $('rankingBody').innerHTML = '<div class="error-box">' + esc(err.message) + '</div>';
+    });
+  };
+}
 
-  function scaleBlock(key,label){
-    const div=document.createElement('div');
-    div.className='field scale-block';
-    div.innerHTML=`
-      <div class="field-title">${label}</div>
-      <div class="scale-scroll">
-        <div class="scale-grid scale-labels">
-          <span>-3<br><small>Sangat di bawah</small></span>
-          <span>-2<br><small>Di bawah</small></span>
-          <span>-1<br><small>Sedikit di bawah</small></span>
-          <span>0<br><small>Sesuai</small></span>
-          <span>+1<br><small>Sedikit di atas</small></span>
-          <span>+2<br><small>Di atas</small></span>
-          <span>+3<br><small>Sangat di atas</small></span>
-        </div>
-        <div class="scale-grid scale-row" id="scale-${key}">
-          ${[-3,-2,-1,0,1,2,3].map((n,i)=>`<button type="button" class="scale-btn ${i===3?'active':''}" data-value="${n}">${n>0?`+${n}`:n}</button>`).join('')}
-        </div>
-      </div>`;
-    div.querySelectorAll('.scale-btn').forEach(btn=>btn.addEventListener('click',()=>{
-      div.querySelectorAll('.scale-btn').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-    }));
-    return div;
-  }
-  function getScaleValue(key){return document.querySelector(`#scale-${key} .scale-btn.active`)?.dataset.value || '0';}
-  function bindRadioButtons(id){const wrap=$(id);wrap.querySelectorAll('.radio-btn').forEach(btn=>btn.addEventListener('click',()=>{wrap.querySelectorAll('.radio-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');}));}
-  function getRadioValue(id){return $(id).querySelector('.radio-btn.active')?.dataset.value || ''}
+function refreshState() {
+  api('state', {}, 10000).then(function(r) {
+    if (!r.ok) throw new Error(r.message || 'Backend error');
+    $('backendBadge').textContent = 'TERHUBUNG';
+    $('backendBadge').className = 'badge ok';
+    $('serverTime').textContent = (r.serverTime || '').split(' ').pop() || '--:--:--';
+  }).catch(function(err) {
+    $('backendBadge').textContent = 'BACKEND ERROR';
+    $('backendBadge').className = 'badge error';
+    $('serverTime').textContent = '--:--:--';
+  });
+}
 
-  let saveInFlight = false;
-  async function saveGeneric(op, params, okMsg){
-    if (saveInFlight) return;
-    if (!state.participant) { showFeedback('bad','Pilih peserta terlebih dahulu.'); return; }
-    saveInFlight = true;
-    try {
-      await api(op,{participantId:state.participant.id,...params});
-      showFeedback('ok',okMsg);
-      $('formSection').classList.add('hidden');
-    } catch(e) { showFeedback('bad',e.message); }
-    finally { saveInFlight = false; }
-  }
+document.addEventListener('DOMContentLoaded', function() {
+  restoreIdentity();
+  enableModules(false);
 
-  function escapeHtml(str){return String(str??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]));}
+  $('saveIdentity').onclick = saveIdentity;
+  $('searchBtn').onclick = searchParticipant;
+  $('searchInput').onkeydown = function(e) {
+    if (e.key === 'Enter') searchParticipant();
+  };
+  $('closeForm').onclick = closeForm;
+  $('auditButton').onclick = showAuditComponent;
+  $('rankingButton').onclick = showRanking;
+  $('assignmentButton').onclick = showAssignmentForm;
 
-  $('evaluatorId').value = state.evaluatorId;
-  $('roleSelect').value = state.role;
-  $('saveIdentity').addEventListener('click',ensureIdentity);
-  $('roleSelect').addEventListener('change',()=>{state.role=$('roleSelect').value;renderModules();});
-  $('participantQuery').addEventListener('keydown',e=>{if(e.key==='Enter')searchParticipant(e.target.value)});
-  $('searchParticipantBtn').addEventListener('click',()=>searchParticipant($('participantQuery').value));
-  $('scanParticipantBtn').addEventListener('click',openCamera);
-  $('closeCameraBtn').addEventListener('click',closeCamera);
-  $('cameraSelect').addEventListener('change', async e => { state.selectedCameraId = e.target.value; await restartCameraWithSelected(); });
-  $('switchCameraBtn').addEventListener('click',cycleCamera);
-  $('retryCameraBtn').addEventListener('click',async () => { await restartCameraWithSelected(); });
-  $('closeFormBtn').addEventListener('click',()=>$('formSection').classList.add('hidden'));
-  $('closeAuditBtn').addEventListener('click',()=>$('auditSection').classList.add('hidden'));
+  document.querySelectorAll('.module').forEach(function(btn) {
+    btn.onclick = function() {
+      if (!requireParticipant()) return;
+      var section = btn.getAttribute('data-section');
+      if (section === 'activity') showActivityForm();
+      if (section === 'posttest') showPostTestForm();
+      if (section === 'retorika') showRetorikaForm();
+      if (section === 'sikap') showSikapForm();
+      if (section === 'problem') showProblemForm();
+      if (section === 'tasks') showTasksForm();
+      if (section === 'incident') showIncidentForm();
+    };
+  });
 
-  ensureIdentity();
-  refreshState(true);
-  setInterval(showLocalClock, 1000);
-  setInterval(()=>refreshState(false), 30000);
-  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') refreshState(true); });
-})();
+  refreshState();
+  setInterval(refreshState, 15000);
+});

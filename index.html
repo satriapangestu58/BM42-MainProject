@@ -1,126 +1,96 @@
 <!doctype html>
 <html lang="id">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0f766e">
-  <title>Bina Mahasiswa XLII — Sistem Penilaian</title>
-  <link rel="stylesheet" href="style.css">
-  <script defer src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BM42 — Sistem Penilaian & Evaluasi</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="app-shell">
-    <header class="topbar">
-      <div>
-        <div class="eyebrow">BINA MAHASISWA XLII</div>
-        <h1>Sistem Penilaian & Evaluasi</h1>
-        <p class="muted">Satu aplikasi untuk pencatatan observasi, penilaian, dan kejadian peserta.</p>
-      </div>
-      <div class="status-wrap">
-        <div id="backendBadge" class="badge neutral">Menghubungkan...</div>
-        <div id="serverClock" class="clock">--:--:--</div>
-      </div>
-    </header>
+<main class="shell">
+<header class="header">
+  <div>
+    <div class="eyebrow">BINA MAHASISWA XLII</div>
+    <h1>Sistem Penilaian & Evaluasi</h1>
+    <p>Satu aplikasi untuk penilaian, pencatatan kejadian, audit, dan rekap peserta.</p>
+  </div>
+  <div class="server-box">
+    <span id="backendBadge" class="badge">MENYAMBUNG</span>
+    <strong id="serverTime">--:--:--</strong>
+  </div>
+</header>
 
-    <section class="card compact setup-card">
-      <div class="row gap">
-        <div class="field grow">
-          <label for="evaluatorId">Kode / nama penilai</label>
-          <input id="evaluatorId" class="input" placeholder="Contoh: SC-01 atau Satria" autocomplete="off">
-        </div>
-        <div class="field role-field">
-          <label for="roleSelect">Peran</label>
-          <select id="roleSelect" class="input">
-            <option value="SC">Steering Committee</option>
-            <option value="RETORIKA">Penilai Retorika</option>
-            <option value="PERSONALIA">Personalia</option>
-            <option value="OC">Organizer Committee</option>
-            <option value="ADMIN">Admin</option>
-          </select>
-        </div>
-        <button id="saveIdentity" class="primary align-end">Simpan</button>
-      </div>
-      <div id="identityInfo" class="small muted">Identitas penilai belum disimpan.</div>
-    </section>
-
-    <section class="card participant-card">
-      <div class="section-title-row">
-        <div>
-          <h2>Pilih Peserta</h2>
-          <p class="muted">Masukkan QR, ID peserta, nama, atau nama obat. Hasil akan muncul otomatis.</p>
-        </div>
-        <button id="scanParticipantBtn" class="primary">Pindai QR Peserta</button>
-      </div>
-      <div class="participant-search-row">
-        <input id="participantQuery" class="input" placeholder="Contoh: P037 / nama peserta / Paracetamol / BM42-XXXX" autocomplete="off">
-        <button id="searchParticipantBtn" class="secondary">Cari Peserta</button>
-      </div>
-      <div id="searchResults" class="search-results"></div>
-      <div id="selectedParticipant" class="selected-participant hidden"></div>
-    </section>
-
-    <section id="moduleSection" class="card hidden">
-      <div class="section-title-row">
-        <div>
-          <h2 id="moduleTitle">Penilaian</h2>
-          <p id="moduleSubtitle" class="muted">Pilih jenis penilaian.</p>
-        </div>
-      </div>
-      <div id="moduleButtons" class="module-grid"></div>
-    </section>
-
-    <section id="auditSection" class="card hidden">
-      <div class="section-title-row">
-        <div>
-          <h2>Audit Kelengkapan</h2>
-          <p class="muted">Cari peserta yang belum memiliki nilai pada komponen tertentu.</p>
-        </div>
-        <button id="closeAuditBtn" class="secondary">Tutup</button>
-      </div>
-      <div id="auditBody"></div>
-    </section>
-
-    <section id="formSection" class="card hidden">
-      <div class="section-title-row">
-        <div>
-          <h2 id="formTitle">Form Penilaian</h2>
-          <p id="formSubtitle" class="muted"></p>
-        </div>
-        <button id="closeFormBtn" class="secondary">Tutup</button>
-      </div>
-      <div id="formBody"></div>
-    </section>
-
-    <section id="feedback" class="card feedback neutral hidden"></section>
-
-    <div id="cameraModal" class="modal hidden">
-      <div class="modal-panel">
-        <div class="section-title-row">
-          <div>
-            <h2>Pindai QR Peserta</h2>
-            <p class="muted">Gunakan kamera belakang dan arahkan QR ke kotak pemindaian.</p>
-          </div>
-          <button id="closeCameraBtn" class="secondary">Tutup</button>
-        </div>
-        <div class="camera-toolbar">
-          <div class="field camera-select-wrap">
-            <label for="cameraSelect">Kamera</label>
-            <select id="cameraSelect" class="input" disabled>
-              <option>Memuat kamera...</option>
-            </select>
-          </div>
-          <div class="camera-actions">
-            <button id="switchCameraBtn" class="secondary" disabled>Ganti Kamera</button>
-            <button id="retryCameraBtn" class="secondary">Coba Lagi</button>
-          </div>
-        </div>
-        <div id="participantReader"></div>
-        <div id="cameraFeedback" class="small muted">Menunggu kamera...</div>
-      </div>
+<section class="card">
+  <div class="grid-3">
+    <div>
+      <label>Kode / nama penilai</label>
+      <input id="evaluatorId" placeholder="Contoh: SC-01 / Satria">
+      <small id="identityInfo">Identitas belum disimpan.</small>
     </div>
-  </main>
+    <div>
+      <label>Peran</label>
+      <select id="role">
+        <option value="OC">Organizer Committee</option>
+        <option value="SC">Steering Committee</option>
+        <option value="PERSONALIA">Personalia</option>
+        <option value="BPM">BPM</option>
+        <option value="SENAT">Senat Fakultas</option>
+        <option value="ADMIN">Admin</option>
+      </select>
+    </div>
+    <div class="align-end">
+      <button id="saveIdentity" class="primary">Simpan Identitas</button>
+    </div>
+  </div>
+</section>
 
-  <script defer src="config.js?v=bm42-v11"></script>
-  <script defer src="app.js?v=bm42-v11"></script>
+<section class="card">
+  <div class="section-head">
+    <div>
+      <h2>Pilih Peserta</h2>
+      <p>Masukkan QR/token, ID peserta, nama, nama obat, atau kelompok.</p>
+    </div>
+    <a class="primary btn-link" href="../bm42-scanner/">Pindai QR Peserta</a>
+  </div>
+  <div class="search-row">
+    <input id="searchInput" placeholder="Contoh: P037 / nama peserta / Paracetamol / BM42-XXXX">
+    <button id="searchBtn" class="secondary">Cari Peserta</button>
+  </div>
+  <div id="candidateList" class="candidate-list"></div>
+  <div id="participantCard" class="participant-card empty">Belum ada peserta dipilih.</div>
+</section>
+
+<section class="card">
+  <h2>Pilih Penilaian</h2>
+  <p id="selectedText">Pilih peserta terlebih dahulu.</p>
+  <div class="assessment-grid">
+    <button class="module" data-section="activity">Keaktifan Materi<small>Catat peserta yang bertanya, menanggapi, atau menjawab.</small></button>
+    <button class="module" data-section="posttest">Post-Test<small>Nilai Materi 1–6 sesuai assignment.</small></button>
+    <button class="module" data-section="retorika">Retorika<small>Penilaian perilaku peserta di pos retorika.</small></button>
+    <button class="module" data-section="sikap">Sikap Peserta<small>Penilaian -3 sampai +3 sepanjang BM.</small></button>
+    <button class="module" data-section="problem">Problem Solving<small>Khusus Steering Committee / Admin.</small></button>
+    <button class="module" data-section="tasks">Tugas<small>Tugas individu dan tugas kelompok.</small></button>
+    <button class="module" data-section="incident">Catatan Kejadian<small>Catatan faktual dan bukti.</small></button>
+    <button id="assignmentButton" class="module restricted">Pembagian Post-Test<small>Hanya OC, Personalia, dan Admin.</small></button>
+  </div>
+  <div class="utility-row">
+    <button id="auditButton" class="secondary">Audit Kelengkapan</button>
+    <button id="rankingButton" class="secondary">Top 10 & Rekap Kelompok</button>
+  </div>
+</section>
+
+<section id="formCard" class="card hidden">
+  <div class="section-head">
+    <div><h2 id="formTitle">Form</h2><p id="formSubtitle"></p></div>
+    <button id="closeForm" class="secondary">Tutup</button>
+  </div>
+  <div id="formBody"></div>
+</section>
+
+<section id="statusBox" class="status">Siap.</section>
+</main>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
