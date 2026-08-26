@@ -1,11 +1,8 @@
-// URL deployment Apps Script yang sudah terbukti bekerja.
-const BM42_API_URL = "https://script.google.com/macros/s/AKfycbwE7iZEI8zOcM1p6Ny1H30gvYzjxNO_e1edo4ZtgJnwMFEJGkbx7uLiMUXnInSGOOUM/exec";
-
-// Nilai awal penilai. Dapat diganti dari antarmuka tanpa mengubah kode.
+// Isi dengan URL /exec deployment Apps Script tunggal untuk BM42.
+// Backend v11 menangani scanner dan penilaian.
+// Contoh:
+// const BM42_API_URL = "https://script.google.com/macros/s/DEPLOYMENT_ID/exec";
+const BM42_API_URL = "PASTE_NEW_APPS_SCRIPT_EXEC_URL_HERE";
 const BM42_DEFAULT_EVALUATOR_ID = "SC-01";
-
-// Jeda polling status backend.
-const BM42_STATE_POLL_MS = 0;
-
-// Jeda scanner agar QR yang sama tidak langsung dikirim berulang.
+const BM42_STATE_POLL_MS = 30000;
 const BM42_SCAN_COOLDOWN_MS = 2500;

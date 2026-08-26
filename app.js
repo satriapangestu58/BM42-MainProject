@@ -12,7 +12,8 @@
     cameraAttempt: 0,
     lastToken: '',
     lastScanAt: 0,
-    requestSeq: 0
+    requestSeq: 0,
+    searchSeq: 0
   };
 
   const modulesByRole = {
@@ -94,7 +95,7 @@
     return ({SC:'Steering Committee', RETORIKA:'Penilai Retorika', PERSONALIA:'Personalia', OC:'Organizer Committee', ADMIN:'Admin'})[role] || role;
   }
 
-  function jsonp(params, timeoutMs=8000) {
+  function jsonp(params, timeoutMs=15000) {
     return new Promise((resolve, reject) => {
       const cb = '__bm42_assess_' + Date.now() + '_' + (++state.requestSeq);
       const url = new URL(BM42_API_URL);
@@ -118,7 +119,7 @@
   }
 
   async function api(op, params={}) {
-    const payload = {action:'assessment_v7', op, evaluatorId:evaluator(), role:state.role, ...params};
+    const payload = {action:'assessment_v11', op, evaluatorId:evaluator(), role:state.role, ...params};
     const res = await jsonp(payload);
     if (!res || res.ok === false) throw new Error(res?.message || res?.code || 'Permintaan gagal.');
     return res;
@@ -203,9 +204,12 @@
 
   async function searchParticipant(q) {
     if (!q.trim()) return;
+    const seq = ++state.searchSeq;
+    const cleanQ = q.trim();
     $('searchResults').innerHTML = '<div class="small muted">Mencari peserta...</div>';
     try {
-      const res = await api('searchParticipant', {q});
+      const res = await api('searchParticipant', {q:cleanQ});
+      if (seq !== state.searchSeq) return;
       if (!res.candidates.length) {
         $('searchResults').innerHTML = '<div class="small muted">Peserta tidak ditemukan.</div>';
         return;
@@ -586,13 +590,13 @@
     $('formSection').classList.remove('hidden');
     $('formTitle').textContent = title;
     $('formSubtitle').textContent = `${state.participant.id} • ${state.participant.name} • ${state.participant.drug}`;
-    if (title === 'Keaktifan Materi') renderParticipationForm();
-    else if (title === 'Post-Test') renderPosttestForm();
-    else if (title === 'Retorika') renderRetorikaForm();
-    else if (title === 'Sikap Peserta') renderSikapForm();
-    else if (title === 'Problem Solving') renderPSForm();
-    else if (title === 'Tugas') renderTaskForm();
-    else renderIncidentForm();
+    if (title === 'Keaktifan Materi') renderParticipationForm(unitHint);
+    else if (title === 'Post-Test') renderPosttestForm(unitHint);
+    else if (title === 'Retorika') renderRetorikaForm(unitHint);
+    else if (title === 'Sikap Peserta') renderSikapForm(unitHint);
+    else if (title === 'Problem Solving') renderPSForm(unitHint);
+    else if (title === 'Tugas') renderTaskForm(unitHint);
+    else renderIncidentForm(unitHint);
     window.scrollTo({top: $('formSection').offsetTop - 10, behavior:'smooth'});
   }
 
@@ -602,7 +606,7 @@
     btn.addEventListener('click', onSave); wrap.appendChild(btn); return wrap;
   }
 
-  function renderParticipationForm() {
+  function renderParticipationForm(unitHint='') {
     const body = $('formBody');
     body.innerHTML = `
       <div class="form-grid">
@@ -611,23 +615,24 @@
         <div class="field form-full"><label>Catatan singkat (opsional)</label><textarea id="partNote" class="input textarea" placeholder="Misalnya: pertanyaan terkait pembagian peran organisasi"></textarea></div>
       </div>`;
     bindRadioButtons('partType');
+    body.querySelector('select#postMateri')?.addEventListener('change',()=>{});
     body.appendChild(formActions(async()=>{
       const selected = getRadioValue('partType');
       await saveGeneric('saveParticipation',{aktivitas:$('partActivity').value,jenis:selected,catatan:$('partNote').value},'Aktivitas peserta tersimpan.');
     },'Catat Aktivitas'));
   }
 
-  function renderPosttestForm() {
+  function renderPosttestForm(unitHint='') {
     const body = $('formBody');
-    body.innerHTML = `<div class="form-grid"><div class="field"><label>Materi</label><select id="postMateri" class="input">${[1,2,3,4,5,6].map(x=>`<option>Materi ${x}</option>`).join('')}</select></div><div class="field"><label>Nilai</label><input id="postScore" class="score-input" type="number" min="0" max="100" placeholder="0–100"></div><div class="field form-full"><label>Catatan (opsional)</label><textarea id="postNote" class="input textarea"></textarea></div></div>`;
+    body.innerHTML = `<div class="form-grid"><div class="field"><label>Materi</label><select id="postMateri" class="input">${[1,2,3,4,5,6].map(x=>`<option ${unitHint===`Materi ${x}`?'selected':''}>Materi ${x}</option>`).join('')}</select></div><div class="field"><label>Nilai</label><input id="postScore" class="score-input" type="number" min="0" max="100" placeholder="0–100"></div><div class="field form-full"><label>Catatan (opsional)</label><textarea id="postNote" class="input textarea"></textarea></div></div>`;
     body.appendChild(formActions(async()=>{
       await saveGeneric('savePosttest',{materi:$('postMateri').value,nilai:$('postScore').value,catatan:$('postNote').value},'Nilai post-test tersimpan.');
     }));
   }
 
-  function renderRetorikaForm() {
+  function renderRetorikaForm(unitHint='') {
     const body = $('formBody');
-    body.innerHTML = `<div class="form-grid"><div class="field"><label>Post</label><select id="retPost" class="input">${Array.from({length:20},(_,i)=>`<option>Post ${String(i+1).padStart(2,'0')}</option>`).join('')}</select></div></div><div style="margin-top:14px" id="retAspects"></div><div class="field" style="margin-top:14px"><label>Catatan umum</label><textarea id="retNote" class="input textarea" placeholder="Catatan perilaku yang paling menonjol"></textarea></div>`;
+    body.innerHTML = `<div class="form-grid"><div class="field"><label>Post</label><select id="retPost" class="input">${Array.from({length:20},(_,i)=>{const v='Post '+String(i+1).padStart(2,'0');return `<option value="${v}" ${unitHint===v?'selected':''}>${v}</option>`}).join('')}</select></div></div><div style="margin-top:14px" id="retAspects"></div><div class="field" style="margin-top:14px"><label>Catatan umum</label><textarea id="retNote" class="input textarea" placeholder="Catatan perilaku yang paling menonjol"></textarea></div>`;
     const wrap = $('retAspects');
     retorikaAspects.forEach(([key,label]) => wrap.appendChild(scaleBlock(key,label)));
     body.appendChild(formActions(async()=>{
@@ -637,9 +642,9 @@
     }));
   }
 
-  function renderSikapForm() {
+  function renderSikapForm(unitHint='') {
     const body = $('formBody');
-    body.innerHTML = `<div class="form-grid"><div class="field"><label>Periode</label><select id="sikapPeriode" class="input"><option>Keseluruhan BM</option><option>Hari 1</option><option>Hari 2</option></select></div></div><div style="margin-top:14px" id="sikapAspects"></div><div class="field" style="margin-top:14px"><label>Catatan</label><textarea id="sikapNote" class="input textarea"></textarea></div>`;
+    body.innerHTML = `<div class="form-grid"><div class="field"><label>Periode</label><select id="sikapPeriode" class="input"><option ${unitHint==='Keseluruhan BM'?'selected':''}>Keseluruhan BM</option><option ${unitHint==='Hari 1'?'selected':''}>Hari 1</option><option ${unitHint==='Hari 2'?'selected':''}>Hari 2</option></select></div></div><div style="margin-top:14px" id="sikapAspects"></div><div class="field" style="margin-top:14px"><label>Catatan</label><textarea id="sikapNote" class="input textarea"></textarea></div>`;
     [['disiplin','Disiplin'],['atribut','Atribut'],['kesopanan','Kesopanan'],['keaktifan','Keaktifan']].forEach(([key,label])=>{
       $('sikapAspects').appendChild(scaleBlock(key,label));
     });
@@ -655,14 +660,14 @@
     }));
   }
 
-  function renderPSForm() {
+  function renderPSForm(unitHint='') {
     const body=$('formBody');
-    body.innerHTML=`<div class="form-grid"><div class="field"><label>Pos problem solving</label><select id="psPos" class="input">${Array.from({length:20},(_,i)=>`<option>Pos ${String(i+1).padStart(2,'0')}</option>`).join('')}</select></div></div><div style="margin-top:14px" id="psAspects"></div><div class="field" style="margin-top:14px"><label>Catatan umum</label><textarea id="psNote" class="input textarea"></textarea></div>`;
+    body.innerHTML=`<div class="form-grid"><div class="field"><label>Pos problem solving</label><select id="psPos" class="input">${Array.from({length:20},(_,i)=>{const v='Pos '+String(i+1).padStart(2,'0');return `<option value="${v}" ${unitHint===v?'selected':''}>${v}</option>`}).join('')}</select></div></div><div style="margin-top:14px" id="psAspects"></div><div class="field" style="margin-top:14px"><label>Catatan umum</label><textarea id="psNote" class="input textarea"></textarea></div>`;
     psAspects.forEach(([key,label])=>$('psAspects').appendChild(scaleBlock(key,label)));
     body.appendChild(formActions(async()=>{const params={pos:$('psPos').value,catatan:$('psNote').value};psAspects.forEach(([key])=>params[key]=getScaleValue(key));await saveGeneric('saveProblemSolving',params,'Penilaian problem solving tersimpan.');}));
   }
 
-  function renderTaskForm() {
+  function renderTaskForm(unitHint='') {
     const body=$('formBody');
     body.innerHTML=`<div class="form-grid"><div class="field"><label>Jenis tugas</label><select id="taskType" class="input"><option value="ESAI">Esai</option><option value="VIDEO">Video</option><option value="LINKEDIN">Post blog LinkedIn</option></select></div><div class="field"><label>Status pengumpulan</label><select id="taskStatus" class="input"><option>Sudah dikumpulkan</option><option>Dikumpulkan terlambat</option><option>Belum dikumpulkan</option><option>Tidak dinilai</option></select></div></div><div id="taskScores" style="margin-top:14px"></div><div class="actions"><button id="saveTaskBtn" class="primary">Simpan Penilaian Tugas</button></div>`;
     renderTaskFields();
@@ -703,9 +708,17 @@
   function bindRadioButtons(id){const wrap=$(id);wrap.querySelectorAll('.radio-btn').forEach(btn=>btn.addEventListener('click',()=>{wrap.querySelectorAll('.radio-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');}));}
   function getRadioValue(id){return $(id).querySelector('.radio-btn.active')?.dataset.value || ''}
 
+  let saveInFlight = false;
   async function saveGeneric(op, params, okMsg){
-    try { await api(op,{participantId:state.participant.id,...params}); showFeedback('ok',okMsg); $('formSection').classList.add('hidden'); }
-    catch(e){ showFeedback('bad',e.message); }
+    if (saveInFlight) return;
+    if (!state.participant) { showFeedback('bad','Pilih peserta terlebih dahulu.'); return; }
+    saveInFlight = true;
+    try {
+      await api(op,{participantId:state.participant.id,...params});
+      showFeedback('ok',okMsg);
+      $('formSection').classList.add('hidden');
+    } catch(e) { showFeedback('bad',e.message); }
+    finally { saveInFlight = false; }
   }
 
   function escapeHtml(str){return String(str??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]));}
@@ -727,4 +740,6 @@
   ensureIdentity();
   refreshState(true);
   setInterval(showLocalClock, 1000);
+  setInterval(()=>refreshState(false), 30000);
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') refreshState(true); });
 })();
